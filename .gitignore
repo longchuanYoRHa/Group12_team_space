@@ -1,0 +1,12 @@
+# CAD and 3D model files
+*.step
+*.STEP
+*.stp
+*.STP
+
+# Other common CAD formats (optional)
+# *.stl
+# *.STL
+# *.iges
+# *.IGES
+
