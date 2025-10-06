@@ -1,6 +1,6 @@
 # Group12-team-space
 
-## AERO62520 Course Timeline
+## AERO62520 Coursework Schedule
 
 ```mermaid
 gantt
@@ -29,3 +29,24 @@ gantt
     Technical Assessment   : crit, cw5, 2025-11-14, 20d
     CW5 Submission        : milestone, cw5_due, 2025-12-12, 0d
 ```
+
+## General goal of the project
+
+Using the given Leo Rover and the robotic arm, build a rover that can navigate through maze and able to pick up the objects in the maze.
+
+## Git workspace structure
+
+- [Mechanical_design](Mechanical_design): Mechanical design of the rover and the robotic arm , with some general draft and the design requirements.
+- [Software_control](Software_control): Software control of the rover and the robotic arm, with some general glance and the software control requirements.
+- [CW1_workplace_charter](CW1_workplace_charter)
+
+## Recent Tasks
+
+**Chassis assembly** 
+Problems: 
+- missing components for connecting the wheel structure to the chassis.
+- wrong port on the given Powerbox
+
+**Remote connection with the rover** 
+
+**ROS example run**
