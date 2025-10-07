@@ -20,3 +20,8 @@ ros2 run robot_state_publisher robot_state_publisher \
   --ros-args -p robot_description:="$(xacro $(ros2 pkg prefix leo_description)/share/leo_description/urdf/leo.urdf.xacro)"
 ```
 
+
+**to view robot frame**
+```bash
+ros2 run tf2_tools view_frames
+```
