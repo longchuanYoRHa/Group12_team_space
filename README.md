@@ -43,10 +43,29 @@ Using the given Leo Rover and the robotic arm, build a rover that can navigate t
 ## Recent Tasks
 
 **Chassis assembly** 
+
 Problems: 
+
+- the suspention is still loose
+- the baring of one wheel is not tight enough
+
+solved：
 - missing components for connecting the wheel structure to the chassis.
 - wrong port on the given Powerbox
 
-**Remote connection with the rover** 
+**Remote connection with the rover(done)** 
 
-**ROS example run**
+**ROS example run(done)**
+
+**Joystick control**
+
+problems:
+
+- joystick mapping yaml file is not working
+(changing the first line of the yaml file to the correct mapping)
+
+**sensor test(done)**
+
+**NUC setup**
+
+**robot arm test**
