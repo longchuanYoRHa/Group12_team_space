@@ -25,3 +25,22 @@ ros2 run robot_state_publisher robot_state_publisher \
 ```bash
 ros2 run tf2_tools view_frames
 ```
+
+**gazebo waiting for world list problem**
+
+https://github.com/gazebosim/gz-sim/issues/2285
+
+after downloading gazebo, 
+```
+sudo apt update#
+sudo apt install ros-jazzy-ros-gz
+```
+
+run these two code
+```
+sudo ufw allow in proto udp to 224.0.0.0/4
+sudo ufw allow in proto udp from 224.0.0.0/4
+```
+https://gazebosim.org/docs/latest/troubleshooting/
+
+![Fig1](ConfigIssue.png)
