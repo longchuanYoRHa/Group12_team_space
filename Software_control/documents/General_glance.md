@@ -44,3 +44,5 @@ sudo ufw allow in proto udp from 224.0.0.0/4
 https://gazebosim.org/docs/latest/troubleshooting/
 
 ![Fig1](ConfigIssue.png)
+
+---
