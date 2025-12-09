@@ -1,0 +1,620 @@
+%%%%%%%%%%%%%%%%%% USAGE INSTRUCTIONS %%%%%%%%%%%%%%%%%%
+% - Compile using LuaLaTeX and biber, unless there is a particular reason not to. Do not use the older LaTex/PDFLaTeX or BibTeX. (The fonts won't work correctly.)
+% - Expect to get 2 warnings when working correctly, one on xcolor and hyperref, and one on ExtSizes saying is better to use a class. These can be ignored.
+% - Font and the report 'year' must be specified when all \documentclass or the template won't work correctly. (There's no error checking/default cases!)
+% - For best performance save images/graphics as PDF files, not as png/jpg/eps. This makes no difference to how images are inserted using \includegraphics.
+% - As many further packages as wanted can be loaded. Below are just an example set. Note that template itself loads a number of packages, including hyperref.
+% - References are handed using biblatex.
+% - Link to the presentation of dissertations policy: https://documents.manchester.ac.uk/display.aspx?DocID=2863
+
+
+
+%%%%%%%%%%%%%%%%%% META DATA SETUP %%%%%%%%%%%%%%%%%%
+% This is where the document title and author are set. Other details for the title page are set later
+% Note that if/when you edit these you may need to 'Recompile from scratch' to get the changes to display in the PDF. (In Overleaf, select the down arrow to the right of the 'Recompile' button)
+\begin{filecontents*}{\jobname.xmpdata}
+  \Title{AERO62520 Coursework-3 Design Requirements Analysis} 
+  \Author{Team 12} % should be student number rather than name to help with annoymous marking
+  \Language{en-GB}
+  \Copyrighted{True}
+  % More meta-data fielda can be added here if wanted, see https://ctan.org/pkg/pdfx?lang=en for fields
+\end{filecontents*}
+
+
+%%%%%%%%%%%%%%%%%% DOCUMENT SETUP %%%%%%%%%%%%%%%%%%
+\documentclass[11pt,meng]{uom_eee_dissertation_casson} % course can be msc or beng
+% Check your course handbook for the correct font size to use. Make sure this is correct - you may get an overlength penalty if not! Is currently 12 for BEng, and 11 for MSc. The template doesn't change this automatically for you
+
+
+%%%%%%%%%%%%%%%%%% PACKAGES AND COMMANDS %%%%%%%%%%%%%%%%%%
+
+% Packages
+\usepackage{graphicx}              % for adding graphics files
+  \graphicspath{ {./images/} }
+\usepackage{amsmath}               % assumes amsmath package installed
+  \allowdisplaybreaks[1]           % allow eqnarrays to break across pages
+\usepackage{amssymb}               % assumes amsmath package installed 
+\usepackage{url}                   % format hyperlinks correctly
+\usepackage{rotating}              % allow portrait figures and tables
+\usepackage{multirow}              % allows merging of rows in tables
+\usepackage{lscape}                % allows pages to be typeset in landscape mode
+\usepackage{tabularx}              % allows fixed width tables
+\usepackage{verbatim}              % enhanced version of built-in verbatim environment
+\usepackage{footnote}              % allows more control over footnote environments
+\usepackage{float}                 % allows H option on floats to force here placement
+\usepackage{booktabs}              % improve table line spacing
+\usepackage{lipsum}                % for adding dummy text here
+\usepackage[base]{babel}           % required for lisum package
+\usepackage{subcaption}            % for multiple sub-figures in a single float
+\usepackage{siunitx}               % add SI units
+% Add your packages here
+\usepackage{longtable}
+\usepackage{array}
+
+% Custom commands
+\newcommand{\degree}{\ensuremath{^\circ}}
+\newcommand{\sus}[1]{$^{\mbox{\scriptsize #1}}$} % superscript in text (e.g. 1st)
+\newcommand{\sub}[1]{$_{\mbox{\scriptsize #1}}$} % subscript in text
+\newcommand{\otoprule}{\midrule[\heavyrulewidth]}
+\newcolumntype{Z}{>{\centering\arraybackslash}X}  % tabularx centered columns 
+% Add your custom commands here
+\newcolumntype{R}[1]{>{\raggedright\arraybackslash}p{#1}} % 定义列类型：R 为可换行左对齐列，宽度以参数给出
+
+
+%%%%%%%%%%%%%%%%%% REFERENCES SETUP %%%%%%%%%%%%%%%%%%
+
+% % Setup your references here. Change the reference style here if wanted
+% \usepackage[style=ieee,backend=biber,backref=true,hyperref=auto,maxbibnames=3,minbibnames=1]{biblatex}
+% % Note backref=true adds a page number (and hyperlink) to each reference so you can easily go back from the references to the main document. You may prefer backref=false if you need to stick strictly to a given reference style
+
+
+% % Fixes which can't be applied in the .cls file
+% \DefineBibliographyStrings{english}{backrefpage = {cited on p\adddot},  backrefpages = {cited on pp\adddot}}
+% %  \renewcommand*{\bibfont}{\large}
+
+
+% % Add more .bib files here if wanted
+% \addbibresource{references.bib}
+
+
+
+%%%%%%%%%%%%%%%%%% AUTOMATIC WORD COUNT SETUP %%%%%%%%%%%%%%%%%%
+% Automatically counts the words present and makes a \mywordcount variable. This is used later to automatically add the word count (which can be overridden if wanted)
+% See https://www.overleaf.com/learn/how-to/Is_there_a_way_to_run_a_word_count_that_doesn%27t_include_LaTeX_commands%3F for info on what words are counted and how to control this. Any changes to what's counted need to be made in uom_thesis_casson.cls, in the \newcommand{\quickwordcount} command. The default doesn't count words in headings, captions, or references and so you may get slightly different numbers if use a different word count tool
+% This can be a bit fragile. If it doesn't work, there's an option later on to just type in a numer
+\quickwordcount{\currfilebase} % run word count. This just counts the words. Is displayed with the \wordcount command later
+
+
+
+%%%%%%%%%%%%%%%%%% START DOCUMENT %%%%%%%%%%%%%%%%%%
+
+% Don't edit these lines, title and author are automatically taken from the document meta-data defined above
+\begin{document}
+% \maketitle
+\makeatletter
+\title{\xmp@Title}
+\studentid{\xmp@Author}
+\makeatother
+
+% Set the below yourself
+\course{Robotics}  % "Master of Science in" or "Bachelor of Engineering in "
+                                                   % is added automatically
+                                                   % Our BEng courses are: Electrical and Electronic Engineering, Electrical Engineering, and Mechatronic Engineering
+                                                   % Our MSc courses are: Advanced Control and Systems Engineering, Advanced Control and Systems Engineering with Extended Research, Communications and Signal Processing, Communications and Signal Processing with Extended Research, Electrical Power Systems Engineering, Advanced Electrical Power Systems Engineering, Renewable Energy and Clean Technology, Renewable Energy and Clean Technology with Extended Research, Robotics, Robotics with Extended Research
+\faculty{Science and Engineering}                  % "Faculty of" is added automatically
+\school{School of Engineering} % "School of" not added automatically (as if in AMBS, School comes at the end rather than the start), so enter full name of School here
+\submitdate{November 2025}                                  % regulations ask only for the year, not month
+\wordcount{\mywordcount}		                   % use \wordcount{} to set the count. Can just type in a number (e.g. \wordcount{1000}	if don't want to use the automatic count.) This is automatically displayed after the table of contents. 
+\maketitle
+
+
+
+%%%%%%%%%%%%%%%%%% LISTS OF CONTENT %%%%%%%%%%%%%%%%%%
+\uomtoc
+% other lists are not required, but can include \uomlof and \uomlot if really want to
+
+
+%%%%%%%%%%%%%%%%%% ABSTRACT %%%%%%%%%%%%%%%%%%
+% \begin{abstract} % put abstract here.
+%   This is abstract text. 
+  
+%   \lipsum[1-2]
+% \end{abstract}%
+% \clearpage
+
+
+
+%%%%%%%%%%%%%%%%%% DECLARATIONS %%%%%%%%%%%%%%%%%%
+\begin{uomoriginality}
+  \uomoriginalitydeclaration 
+  % If the standard originality decalaration is sufficient, saying no portion of the work has been submitted in support of an application for another degree or qualification, the above command will automatically add the required text and nothing else is needed in this section.
+  % If the standard statment isn't sufficient, then comment out the \uomoriginalitydeclaration command and type in your own text here explaining the authorship of any re-used portions. 
+\end{uomoriginality}
+\uomcopyrightstatement
+
+
+
+%%%%%%%%%%%%%%%%%% ACKNOWLEDGEMENTS %%%%%%%%%%%%%%%%%%
+% \begin{uomacknowledgements}
+% Acknowledgments go here.
+% \end{uomacknowledgements}
+
+
+
+%%%%%%%%%%%%%%%%%% Start content %%%%%%%%%%%%%%%%%%
+\uomstartmainbody % Don't delete. used to flag to the hyperlinks in the PDF that the main content is  starting
+
+
+
+%%%%%%%%%%%%%%%%%% Problem Statment %%%%%%%%%%%%%%%%%%
+\section{Problem Statement} % can use \input{} or \include{} for each section to draw content from other files rather than having everything in one big file
+  
+  \subsection{Custom Requirement Statement}
+  "Develop a robot which can autonomously retrieve coloured objects from the environment and place them in matching storage bins located at the starting point." 
+
+  \subsection{Problem Statement}
+  Growing labour shortages have many industries seeking to automate simple tasks. Autonomous navigation, object recognition and manipulation are tasks that span the field of robotics. A robotic system that fulfils these requirements will have many uses in the wider world and serve as a good example of robotic capability. Primarily designed as a learning exercise this project provides an opportunity to explore different robotic systems and their interplay whilst also attempting to mimic a real-world collaborative industry scenario.
+
+  
+
+%%%%%%%%%%%%%%%%%% Concept of Operations %%%%%%%%%%%%%%%%%%
+\section{Concept of Operations (CONOPS)} \label{CONOPS}
+
+
+  \subsection{CONOPS State Transitions}
+    This state-machine diagram \autoref{fig:co_state_trans} provides a compact mission logic overview, linking all CONOPS phases and the decision gates that move the rover forward or trigger recovery. It answers: (1) Where in the mission loop are we? (2) What condition must be satisfied to advance? (3) What happens on failure or operator intervention?
+  
+    \begin{figure}
+      \centering
+      \includegraphics[alt={State-machine diagram of CONOPS phases and decision gates.},
+      width=0.9\textwidth, keepaspectratio=true]{images/CONOPS-state-machine.pdf}
+      \caption[CONOPS state transitions]{State-machine for CONOPS: shows phase flow from CO-01 READY through CO-02 mapping, CO-03 local positioning, CO-04 to CO-06 grasping and map update, CO-07 to CO-09 deposit, plus error handling, timestamps and manual control.}
+      \label{fig:co_state_trans}
+    \end{figure}
+
+
+  \subsection{Start and Setup}
+    \textbf{Purpose}: As shown in \autoref{fig:co1}, the operator places the rover in the designated Start Area, confirms arena readiness (walls, bins, declared colours, and static obstacle placement), powers sensors and actuators, and configures declared run parameters. Operators confirm sensor health and mission parameters on the operator interface and issue the start command to begin autonomous operation.
+    
+    \textbf{Preconditions}: Start Area placement by operator and availability of declared run parameters.
+    
+    \textbf{Postconditions}: Rover is powered, sensors and actuators pass health checks, run parameters are recorded, and the mission manager reports READY.
+    
+    \textbf{Recovery}: If any critical sensor or actuator fails health checks, the system alerts the operator and allows sensor restart or manual intervention; if recovery fails within the allowed setup window the run is aborted.
+
+    \begin{figure}
+      \centering
+      \includegraphics[alt={Rover in Start Area with red/blue/green bins, planned navigation arrow, and a central static obstacle.},
+      width=0.9\textwidth, keepaspectratio=true]{images/CO1.pdf}
+      \caption[CO-01 Start and Setup]{CO-01 Navigation setup: rover positioned in Start Area beside colour-coded bins; planned route (yellow arrow) toward scattered target zones is shown and a large black rectangle marks a static obstacle.}
+      \label{fig:co1}
+    \end{figure}
+
+    
+  \subsection{Autonomous Navigation to Search}
+    \textbf{Purpose}: As shown in \autoref{fig:co2}, after start, the rover departs the Start Area and performs arena-wide autonomous traversal to search for coloured blocks using onboard LIDAR and camera sensors while respecting arena boundaries and avoiding static obstacles.
+    
+    \textbf{Preconditions}: LIDAR point clouds, camera images, map/boundary data, and declared colour set.
+    
+    \textbf{Postconditions}: Candidate object detections with coarse positions and an updated local occupancy map.
+    
+    \textbf{Recovery}: Upon localization drift or odometry failure, switch to visual re-localization or return to the Start Area for manual recovery.
+
+    \begin{figure}
+      \centering
+      \includegraphics[alt={Rover with forward-facing camera and LIDAR scanning a nearby box and floor area, showing sensor cones and a detected red block.},
+      width=0.9\textwidth, keepaspectratio=true]{images/CO2.pdf}
+      \caption[CO-02 Autonomous Navigation to Search]{Navigation-phase diagram for CO-02: the rover uses camera and LIDAR (sensor cones shown) to scan ahead, detect a red coloured object on a box, and update the local occupancy map while avoiding obstacles.}
+      \label{fig:co2}
+    \end{figure}
+
+
+  \subsection{Local Positioning at Target}
+    \textbf{Purpose}: As shown in \autoref{fig:co3}, on detection of a candidate block or bin, the rover executes a local approach routine to position itself adjacent to the target using fine depth/LIDAR alignment to reach a stable, collision-safe pose suitable for perception and manipulation.
+    
+    \textbf{Preconditions}: Coarse candidate pose, vehicle odometry, and close-range sensor data.
+    
+    \textbf{Postconditions}: A refined target pose relative to the robot and a verified safe manipulator approach pose.
+    
+    \textbf{Recovery}: If the rover cannot achieve a collision-free grasping pose within N retries, the target is marked as unavailable, and the rover resumes its search.
+
+    \begin{figure}
+      \centering
+      \includegraphics[alt={Rover positioned beside a box with arm-gripper and depth camera focused on a red block, showing sensor cones and a 300 mm approach offset.},
+      width=0.9\textwidth, keepaspectratio=true]{images/CO3.pdf}
+      \caption[CO-03 Local Positioning at Target]{CO-03 Local positioning: the rover aligns using depth camera and LIDAR (sensor cones) to refine the block pose and attain a collision‑safe manipulator approach (300 mm clearance shown)}
+      \label{fig:co3}
+    \end{figure}    
+
+
+  \subsection{Perception and Verification}
+    \textbf{Purpose}: As shown in \autoref{fig:co4}, sensors refine object localization, classify candidate objects against the declared colour set, and publish pose plus confidence for downstream decision-making. Perception must confirm the object meets classification and pose-confidence thresholds before manipulation is attempted.
+    
+    \textbf{Preconditions}: Sensor colour data, candidate pose and declared colour labels.
+    
+    \textbf{Postconditions}: Final manipulation pose, colour label, and confidence score.
+    
+    \textbf{Recovery}: On low confidence, system classifies as false positive and continues search.
+
+    \begin{figure}
+      \centering
+      \includegraphics[alt={Rover positioned beside a box with red block; arm-gripper and depth camera refine object pose and confirm colour against declared set with confidence metric.},
+      width=0.9\textwidth, keepaspectratio=true]{images/CO4.pdf}
+      \caption[CO-04 Perception and Verification]{CO-04 Perception: sensors refine block pose and colour classification; confidence metric confirms readiness for manipulation.}
+      \label{fig:co4}
+    \end{figure}  
+
+
+  \subsection{Manipulation}
+    \textbf{Purpose}: As shown in \autoref{fig:co5}, the manipulator aligns the end effector to the final manipulation pose, executes end-effector sequence, verifies success with onboard sensors (force, tactile, or visual), and secures the object for transport. If verification fails, recovery behaviours are executed.
+    
+    \textbf{Preconditions}: Final manipulation pose and end-effector parameters from perception.
+    
+    \textbf{Postconditions}: End-effector success/failure flag and object deposited in payload location.
+    
+    \textbf{Recovery}: On end-effector failure perform safe retreat, adjust approach or end-effector parameters, and retry up to a configured attempt limit, if still unsuccessful mark target as failed.
+
+    \begin{figure}
+      \centering
+      \includegraphics[alt={Rover with payload sled and container; arm‑gripper approaches and grasps a red block on a 150 mm-high box along the yellow path.},
+      width=0.9\textwidth, keepaspectratio=true]{images/CO5.pdf}
+      \caption[CO-05 Manipulation]{CO-05 Manipulation: the arm aligns to the final pose and follows the indicated path to grasp the red block on the 150 mm box, then places it into the payload container; success is verified by onboard sensing.}
+      \label{fig:co5}
+    \end{figure}
+
+
+  \subsection{Robot Returns to Start Area}
+    \textbf{Purpose}: As shown in \autoref{fig:co6}, based on mission policy (e.g., capacity reached or ordered mode rules), the rover returns to the Start Area or repositions for further retrieval/ deposition tasks.
+    
+    \textbf{Preconditions}: Storage/capacity state, current map, Start Area pose, mission policy.
+    
+    \textbf{Postconditions}: Rover pose returns to Start Area or prepared deposition location, mission state update (arrived), and deposition request if applicable.
+    
+    \textbf{Recovery}: If path blocked, re-plan or choose alternate route; if localization fails, perform visual re localization or request operator assist.
+
+    \begin{figure}
+      \centering
+      \includegraphics[alt={Top-down arena: rover follows a yellow path back to the Start Area; red, blue, and green bins shown; central obstacle avoided.},
+      width=0.9\textwidth, keepaspectratio=true]{images/CO6.pdf}
+      \caption[CO-06 Robot Returns to Start Area]{CO-06 Return to Start Area: the rover follows the indicated path to the Start Area and colour bins while avoiding the central obstacle.}
+      \label{fig:co6}
+    \end{figure}    
+
+
+  \subsection{Robot Positions Adjacent to Coloured Bin}
+    \textbf{Purpose}: The robot uses sensor guidance for navigation and positioning itself beside the target-Coloured Bin to establish a safe approach path for Coloured Object delivery, as shown in \autoref{fig:co7}.
+    
+    \textbf{Preconditions}: Bin coarse position, sensor data, odometry.
+    
+    \textbf{Postconditions}: Approach pose for bin deposition (robot base pose), local map update.
+    
+    \textbf{Recovery}: If bin not found or occluded, attempt alternate viewpoints or use operator input.
+
+    \begin{figure}
+      \centering
+      \includegraphics[alt={Rover with payload sled positioned beside a floor red bin; 150 mm bin height and 150 mm standoff indicated; yellow wedge shows the approach corridor for safe deposition.},
+      width=0.9\textwidth, keepaspectratio=true]{images/CO7.pdf}
+      \caption[CO-07 Robot Positions Adjacent to Coloured Bin]{CO-07 Bin adjacency: the rover halts with a \~150 mm standoff to the coloured bin and aligns a clearance-safe approach corridor (shaded) for deposition.}
+      \label{fig:co7}
+    \end{figure}
+
+
+  \subsection{Deposition into Colour-Matching Bin} % CO-08 and CO-09 merged
+    \textbf{Purpose}: As shown in \autoref{fig:co8-1}, the rover approaches the declared bin on the floor, verifies bin pose and colour, aligns the manipulator with safe clearance from the payload sled/container, and deposits the block; ordered-mode constraints are enforced if active, shown in \autoref{fig:co8-2}.
+    
+    \textbf{Inputs}: Confirmed bin pose and colour, block pose in gripper, deposition plan/payload item info.
+    
+    \textbf{Outputs}: Deposition success/failure record, updated payload inventory and task counts.
+    
+    \textbf{Recovery}: On misplacement, drop, or bounce-out, reposition and retry up to the allowed attempts; on persistent failure, log the event and either continue the mission or request operator intervention according to mission rules.
+
+    \begin{figure}
+      \centering
+      \includegraphics[alt={Schematic of the deposition phase: the rover with payload sled and container lifts a red block with its arm, preparing to swing toward the matching red bin on the floor.},
+      width=0.9\textwidth, keepaspectratio=true]{images/CO8_1.pdf}
+      \caption[CO-08 Rover Deposition into Colour-Matching Bins]{CO-08 Deposition: rover verifies the red bin, lifts the block from the payload sled/container, and initiates a clearance‑safe swing to transfer the block toward the matching floor bin.}
+      \label{fig:co8-1}
+    \end{figure}
+  
+    \begin{figure}
+      \centering
+      \includegraphics[alt={Rover deposits a red block into the red floor bin; yellow arrow shows the arm swing path; right panel lists run notes.},
+      width=0.9\textwidth, keepaspectratio=true]{images/CO8_2.pdf}
+      \caption[CO-09 Deposit Block into Bin of Corresponding Colour]{CO-09 Deposit: the arm follows the indicated path and releases the block into the matching red bin on the floor; success is confirmed and logged, with retry on miss per mission rules.}
+      \label{fig:co8-2}
+    \end{figure}
+
+
+  \subsection{Safety, Operator Controls, and Mission End}
+    \textbf{Purpose}: Define safety controls and operator interfaces: users may pause, emergency-stop, resume, or restart via hardware and operator interfaces. In case of collision or unrecoverable fault the system permits manual intervention and restart within the test window. At mission end the system performs safe shutdown and archives logs.
+    
+    \textbf{Preconditions}: Emergency/pause signals, fault detection, and mission-timer status.
+    
+    \textbf{Postconditions}: System safe state, archived logs, and restart/terminate decision.
+    
+    \textbf{Requirements}: Emergency-stop must place drive systems into a safe state and log the event with timestamps.
+
+
+
+\begin{landscape}  
+
+%%%%%%%%%%%%%%%%%% Functional Requirements %%%%%%%%%%%%%%%%%%
+\section{Functional Requirements} \label{functional_requirements}
+
+\scriptsize
+\begin{longtable}{@{}R{1.2cm} R{15.8cm} R{7.5cm}@{}}
+\caption{\textbf{Functional Requirements}} \label{tab:functional_requirements} \\
+
+\toprule
+Requirement ID & Requirement & Source \\
+\midrule
+\endfirsthead
+
+\multicolumn{3}{c}{{\tablename\ \thetable{} -- continued}} \\
+\toprule
+Requirement No. & Requirement & Source \\
+\midrule
+\endhead
+
+\bottomrule
+\multicolumn{3}{r}{{continued on next page}} \\
+\endfoot
+
+\endlastfoot
+
+% --- Operation ---
+\multicolumn{3}{l}{\textbf{Operation}} \\[4pt]
+
+FR-01 & The robot shall operate within the Test Environment. & Customer requirements Statement; Stakeholder engagement \\[4pt]
+FR-01.1 & The boundary will be defined by a white wall < 0.5 m high. & Stakeholder engagement \\[4pt]
+FR-01.2 & The Test Environment will be  4 m < x < 6 m. & Collected Data; Stakeholder engagement \\[4pt]
+FR-01.3 & The Test Environment will be level. & Stakeholder engagement \\[6pt]
+
+FR-02 & The robot shall be capable of restarting operation. & Engineering Judgement \\[4pt]
+FR-02.1 & The robot shall achieve full operation in <5 minutes. & Stakeholder engagement \\[6pt]
+
+FR-03 & All hardware shall be mounted on the robot platform. & Stakeholder engagement \\[4pt]
+FR-03.1 & Combined weight of hardware shall be less than 5 kg. & Data sheet - Leo Rover 1.8 \\[8pt]
+
+% --- Navigation and Planning ---
+\multicolumn{3}{l}{\textbf{Navigation and Planning}} \\[4pt]
+
+FR-04 & The robot shall navigate autonomously. & Customer requirements Statement; Stakeholder engagement \\[4pt]
+FR-04.1 & The robot shall avoid obstacles and unintended collisions. & Engineering Judgement \\[4pt]
+FR-04.2 & No external controls shall be used except in the event of a collision or unexpected behaviour. & Stakeholder engagement \\[4pt]
+FR-04.3 & Path planning should avoid tangling of cables (if present). & Risk Assessment \\[4pt]
+FR-04.4 & Path planning shall locally generate paths for navigation from sensor data. & Stakeholder engagement \\[4pt]
+FR-04.5 & Maximum linear velocity shall be limited to <= 250 mm/s. & Risk Assessment \\[4pt]
+FR-04.6 & Maximum angular velocity shall be <60°/s. & Data sheet - Leo Rover 1.8 \\[8pt]
+
+% --- Vision and Perception ---
+\multicolumn{3}{l}{\textbf{Vision and Perception}} \\[4pt]
+
+FR-05 & The robot shall locate \& classify the Coloured Objects. & Stakeholder engagement; Engineering Judgement \\[4pt]
+FR-05.1 & The colour of the Coloured Objects will be declared by Team 12. & Stakeholder engagement \\[4pt]
+FR-05.2 & The minimum size of the Coloured Objects shall be 20 x 20 x 20 mm. & Collected Data \\[4pt]
+FR-05.3 & The robot shall locate \& classify at a distance >75 mm. & Engineering Judgement \\[4pt]
+FR-05.4 & The robot perception shall tolerate lighting variation including shadows and differing shades of the same nominal colour. & Stakeholder engagement; Engineering Judgement \\[6pt]
+
+FR-06 & The robot shall locate \& classify the Coloured Bins. & Stakeholder engagement \\[4pt]
+FR-06.1 & The Coloured Bins will be 150 x 150 x 150 mm. & Stakeholder engagement \\[4pt]
+FR-06.2 & The robot perception shall tolerate lighting variation including shadows and differing shades of the same nominal colour. & Stakeholder engagement; Engineering Judgement \\[8pt]
+
+% --- Object Manipulation ---
+\multicolumn{3}{l}{\textbf{Object Manipulation}} \\[4pt]
+
+FR-07 & The robot shall manipulate the Coloured Objects. & Stakeholder engagement \\[4pt]
+FR-07.1 & The shape of the Coloured Objects will be specified by Team 12. & Stakeholder engagement \\[4pt]
+FR-07.2 & The minimum size of the Coloured Objects shall be 20 x 20 x 20 mm. & Collected Data \\[4pt]
+FR-07.3 & The robot shall manipulate at a height of 150 mm. & Engineering Judgement \\[4pt]
+FR-07.4 & The maximum weight shall be 150 g. & Data sheet - myCobot 280pi \\[4pt]
+FR-07.5 & The positional accuracy shall be ± 1 mm. & Data sheet - myCobot 280pi \\[6pt]
+
+FR-08 & The robot shall transport the Coloured Objects. & Stakeholder engagement \\[4pt]
+FR-08.1 & The robot shall transport a minimum of 1 Coloured Object. & Stakeholder engagement \\[4pt]
+FR-08.2 & The robot should transport a maximum of 3 Coloured Objects. & Stakeholder engagement \\[6pt]
+
+FR-09 & The robot shall deposit the Coloured Objects into the corresponding Coloured Bins. & Stakeholder engagement \\[4pt]
+FR-09.1 & The robot shall deposit through a 100 mm Diameter Hole in the top of the Coloured Bin. & Stakeholder engagement \\[8pt]
+
+% --- Safety ---
+\multicolumn{3}{l}{\textbf{Safety}} \\[4pt]
+
+FR-10 & The robot shall be capable of being manually handled. & Risk Assessment \\[4pt]
+FR-10.1 & The robot will have a mass <20 kg. & Risk Assessment \\[4pt]
+FR-10.2 & The robot should have a form factor that allows proper lifting technique. & Risk Assessment \\[4pt]
+FR-10.3 & The robot should not have any payloads which could cause injury. & Risk Assessment \\[6pt]
+
+FR-11 & The robot shall be able to be stopped in the case of unexpected behaviour. & Risk Assessment \\[4pt]
+FR-11.1 & The robot shall be capable of being issued a stop command wirelessly. & Risk Assessment \\[4pt]
+FR-11.2 & The robot shall have a form of easily accessible emergency shutdown button or switch. & Risk Assessment \\[8pt]
+
+% --- Power ---
+\multicolumn{3}{l}{\textbf{Power}} \\[4pt]
+
+FR-12 & The robot should operate without trailing cables. & Stakeholder engagement \\[4pt]
+FR-12.1 & Onboard power should provide for a minimum of 25 minutes. & Engineering Judgement \\[4pt]
+FR-12.2 & Electrical design and maintenance shall comply with lab risk assessment. & Stakeholder engagement \\
+
+\end{longtable}
+
+
+%%%%%%%%%%%%%%%%%% Performance Requirements %%%%%%%%%%%%%%%%%%
+\section{Performance Requirements} \label{sec:performance_requirements}
+
+\scriptsize
+\begin{longtable}{@{}R{1.2cm} R{15.8cm} R{7.5cm}@{}}
+\caption{\textbf{Performance Requirements}} \label{tab:performance_requirements} \\
+
+\toprule
+Requirement No. & Performance Requirement & Source of Functional Requirement / Limitation \\
+\midrule
+\endfirsthead
+
+\multicolumn{3}{c}{{\tablename\ \thetable{} -- continued}} \\
+\toprule
+Requirement ID & Performance Requirement & Source of Functional Requirement / Limitation \\
+\midrule
+\endhead
+
+\bottomrule
+\multicolumn{3}{r}{{continued on next page}} \\
+\endfoot
+
+\endlastfoot
+
+PR-01 & The system shall traverse the arena using onboard sensors without reliance on a preloaded map. & Stakeholder Engagement 1 \& 2; Engineering Judgement \\[4pt]
+
+PR-02 & The rover shall achieve a nominal linear speed of 0.4 m/s and angular speed of 60\degree/s for effective traversal. Traversal speed shall remain within 0.12--0.4 m/s, with fine approach speed $\leq$0.12 m/s for depth-assisted alignment. & Stakeholder Engagement 1 \& 2; Engineering Judgement; Manufacturer data sheet --- Leo Rover 1.8; Intel RealSense D435i \\[6pt]
+
+PR-03 & The system shall support arena dimensions published prior to testing and complete setup within 5 minutes. & Stakeholder Engagement 2; Engineering Judgement \\[6pt]
+
+PR-04 & The system shall support sequential retrieval of blocks; multi-grasp is optional. Block size shall be between 20 mm and 75 mm. & Stakeholder Engagement 2; Engineering Judgement \\[6pt]
+
+PR-05 & The system shall deposit blocks into colour-matched bins. & myCobot280pi; myCobot280 Adaptive Gripper; Stakeholder Engagement 1 \& 2; Engineering Judgement \\[6pt]
+
+PR-06 & The system should support ordered collection mode when declared before run. Blocks shall be deposited in declared order. & Stakeholder Engagement 2; Engineering Judgement \\[6pt]
+
+PR-07 & The navigation stack shall detect and avoid static obstacles. & (Source implied from navigation requirements) Stakeholder Engagement 2; Engineering Judgement \\[6pt]
+
+PR-08 & The system shall reject non-target-coloured objects. & Stakeholder Engagement 2; Engineering Judgement \\[6pt]
+
+PR-09 & The system shall operate in a flat arena with no elevation changes or ramps. & Stakeholder Engagement 2; Engineering Judgement \\[6pt]
+
+PR-10 & The system shall allow restart during testing; restart time shall count against mission time. & Stakeholder Engagement 2; Engineering Judgement \\[6pt]
+
+PR-11 & The system shall operate untethered on battery for $\geq$20 minutes unless an approved alternative is used. & Leo Rover 1.8; Stakeholder Engagement 2; Engineering Judgement \\[6pt]
+
+PR-12 & The gripper shall support declared jaw opening and payload capacity for standard block geometry. Gripping range shall be 20--45 mm; block weight 150 g; payload $\leq$250 g. & myCobot280 Adaptive Gripper; myCobot 280pi; Engineering Judgement \\[6pt]
+
+PR-13 & The system shall sample at $\geq$5 Hz for obstacle detection. & SLAMTEC RPLIDAR A2M12; Engineering Judgement \\[6pt]
+
+PR-14 & The system shall operate only on the declared colour set submitted before the run. & Stakeholder Engagement 2; Engineering Judgement \\[6pt]
+
+PR-15 & The system shall publish object poses with $\leq$50 mm position error and $\leq$10\degree\ orientation error. & Intel RealSense D435i; myCobot 280pi; Engineering Judgement \\[6pt]
+
+PR-16 & Calibration shall be performed during development only; no runtime calibration is required. & Stakeholder Engagement 1 \& 2; Engineering Judgement \\[6pt]
+
+PR-17 & The planner shall generate reactive paths using onboard sensor data only; no global map shall be used. Replan latency shall be $\leq$500 ms. & Engineering Judgement \\[6pt]
+
+PR-18 & Pose estimates shall be updated at $\geq$10 Hz using odometry and sensor data with timestamp sync error $\leq$10 ms. & Leo Rover 1.8; ASUS NUC12WSK; Engineering Judgement \\[6pt]
+
+PR-19 & Navigation status, current goal, and completion events shall be published with $\leq$200 ms latency. & Engineering Judgement \\[6pt]
+
+PR-20 & Emergency stop shall halt actuators and enter safe state within 200 ms; hardware override supported. & Leo Rover 1.8; Engineering Judgement \\[6pt]
+
+PR-21 & Battery voltage and current shall be logged at $\geq$1 Hz and alarms published when thresholds are crossed. & Leo Rover 1.8; Engineering Judgement \\[6pt]
+
+PR-22 & A consistent TF tree shall be published at $\geq$10 Hz with correct parent-child relations and time sync. & myCobot 280pi; Intel RealSense D435i; Engineering Judgement \\[6pt]
+
+PR-23 & TF documentation should include frame hierarchy, coordinate conventions, and time sync approach. & Engineering Judgement \\[6pt]
+
+PR-24 & On-field setup shall complete within 5 minutes excluding development calibration. & Stakeholder Engagement 2; Engineering Judgement \\[6pt]
+
+PR-25 & Mission execution shall complete within 20 minutes; pack-up within 5 minutes; restarts counted. & Stakeholder Engagement 1 \& 2; Engineering Judgement \\[6pt]
+
+PR-26 & Perception shall publish a colour classification confidence value and require confidence $\geq$0.80 before permitting manipulation actions. & Engineering Judgement; Intel RealSense D435i \\[6pt]
+
+PR-27 & Manipulator pose acceptance before grasping shall be lateral error $\leq$10 mm and angular error $\leq$10\degree. & Engineering Judgement; Manufacturer data sheet --- myCobot 280pi; Intel RealSense D435i \\[6pt]
+
+PR-28 & Minimum safety standoff from walls/obstacles shall be $\geq$0.25 m. & Engineering Judgement; Manufacturer data sheet --- SLAMTEC RPLIDAR A2M12 \\
+
+\end{longtable}
+
+
+
+
+%%%%%%%%%%%%%%%%%% Requirements Verification Matrix %%%%%%%%%%%%%%%%%%
+\section{Requirements Verification Matrix} \label{sec:requirements_verification_matrix}
+
+\scriptsize
+\begin{longtable}{@{}R{1.2cm} R{9.5cm} R{3.5cm} R{4.0cm} R{3.0cm} R{1.0cm}@{}}
+\caption{\textbf{Performance Requirements Verification Matrix}} \label{tab:performance_requirements_verification} \\
+
+\toprule
+Requirement No. & Shall Statement & Verification method & Verification of success criteria & Responsible Party & Results \\ \midrule
+\endfirsthead
+
+\multicolumn{6}{c}{{\tablename\ \thetable{} -- continued}} \\ 
+\toprule
+Requirement No. & Shall Statement & Verification method & Verification of success criteria & Responsible Party & Results \\ \midrule
+\endhead
+
+\bottomrule
+\multicolumn{6}{r}{{continued on next page}} \\ 
+\endfoot
+
+\endlastfoot
+
+1 & The robot shall operate within the Test Environment. & Demonstration & Robot shown operation is not impeded by any factors of the testing environment. & All & TBC \\[4pt]
+
+2 & The robot shall be capable of restarting the operation. & Demonstration & Robot can be shown to restart the operation after interruption/from off state. & AB & TBC \\[4pt]
+
+2.1 & The robot shall achieve full operation in <5 minutes. & Test & In multiple trials the robot can be restarted and fully operational within the 5 minute window. & AB, ZP & TBC \\[4pt]
+
+3 & All hardware shall be mounted on the robot platform. & Demonstration & There is no un-mounted hardware. & AB, ZP & TBC \\[4pt]
+
+3.1 & Combined weight of payload shall be less than 5kg. & Analysis & The combined calculated weight of the payload is less than 5kg. & NL, AB & TBC \\[4pt]
+
+4 & The robot shall navigate autonomously. & Test & The robot repeatedly navigates the environment without external influence for an extended period of time. & SH, QS & TBC \\[4pt]
+
+4.1 & The robot shall avoid obstacles and unintended collisions. & Demonstration & During operation the robot does not impact the test environment wall, deliberate obstacles, coloured bins or boxes unintentionally. & SH, AB & TBC \\[4pt]
+
+4.2 & No external controls shall be used except in the event of a collision or unexpected behaviour. & Demonstration & The robot navigates autonomously unless the specified situations occur. & SH & TBC \\[4pt]
+
+4.4 & Path planning shall locally generate paths for navigation from sensor data. & Test & The robot successfully navigates random environments without preloaded data. & SH & TBC \\[4pt]
+
+4.5 & Maximum linear velocity shall be limited to <= 250 mm/s. & Test & The robot does not exceed 250 mm/s during test operation. & SH & TBC \\[4pt]
+
+4.6 & Maximum angular velocity shall be <60\degree/s. & Test & The robot does not exceed 60\degree/s during test operation. & SH & TBC \\[4pt]
+
+5 & The robot shall locate classify the Coloured Objects. & Test & The robot provides positional data (within tolerance) and correctly identifies the object's colour. & QS, AB & TBC \\[4pt]
+
+5.2 & The minimum size of the Coloured Objects shall be 20 x 20 x 20 mm. & Test & The robot shall correctly locate and classify blocks that measure 20 mm on a side. & QS, AB & TBC \\[4pt]
+
+5.3 & The robot shall locate classify at a distance >75 mm. & Test & The robot provides accurate positional data and correctly identifies the object's colour whilst positioned adjacent to the coloured object's mounting box. & QS, AB & TBC \\[4pt]
+
+5.4 & The robot perception shall tolerate lighting variation including shadows and differing shades of the same nominal colour. & Demonstration & The robot can be shown to correctly identify an object's colour under the natural laboratory lighting conditions. & QS, AB & TBC \\[4pt]
+
+6 & The robot shall locate classify the Coloured Bins. & Test & The robot provides accurate positional data and correctly identifies the bins' colour during testing. & QS, AB & TBC \\[4pt]
+
+6.2 & The robot perception shall tolerate lighting variation including shadows and differing shades of the same nominal colour. & Demonstration & The robot can be shown to correctly identify the bins' colour under the natural laboratory lighting conditions. & QS, AB & TBC \\[4pt]
+
+7 & The robot shall manipulate the Coloured Objects. & Test & The robot shall successfully and repeatedly manipulate the Coloured Objects in the desired way. & NL, ZP & TBC \\[4pt]
+
+7.2 & The minimum size of the Coloured Objects shall be 20 x 20 x 20 mm. & Test & The robot shall successfully manipulate objects no smaller than 20 mm on a side. & NL, ZP & TBC \\[4pt]
+
+7.3 & The robot shall manipulate at a height of 150 mm. & Demonstration & The task space of the robot shall include 150 mm above the ground with margin. & NL, ZP & TBC \\[4pt]
+
+7.4 & The maximum weight shall be 150 g. & Analysis & When calculated, none of the coloured blocks shall weigh more than 150 g. & NL, ZP & TBC \\[4pt]
+
+7.5 & The positional accuracy shall be ± 1 mm. & Demonstration & The robot shall demonstrate that it can complete manipulation tasks that require precision. & NL, ZP & TBC \\[4pt]
+
+8 & The robot shall transport the Coloured Objects. & Test & The robot will repeatedly carry coloured objects between given locations. & NL, ZP, SH & TBC \\[4pt]
+
+8.1 & The robot shall transport a minimum of 1 Coloured Object. & Demonstration & The robot will show it can transport a single coloured object inside the test environment. & NL, ZP, SH & TBC \\[4pt]
+
+9 & The robot shall deposit the Coloured Objects into the corresponding Coloured Bins. & Test & The robot will show that it can repeatedly deposit the Coloured object into the correct bin. & NL, ZP & TBC \\[4pt]
+
+9.1 & The robot shall deposit through a 100 mm Diameter Hole in the top of the Coloured Bin. & Demonstration & The accuracy of the manipulation will be sufficient to show the coloured objects being deposited through the hole. & NL, ZP & TBC \\[4pt]
+
+10 & The robot shall be capable of being manually handled. & Demonstration & The robot shall be picked up and placed into the test environment. & NL, ZP & TBC \\[4pt]
+
+10.1 & The combined weight of the robot and the payload shall be <20 kg. & Analysis & When calculated the sum of weights of all the components and the payload shall be less than 20 kg. & NL, AB & TBC \\[4pt]
+
+11 & The robot shall be able to be stopped in the case of unexpected behaviour. & Demonstration & Emergency shutdown shall be demonstrated. & ZP & TBC \\[4pt]
+
+11.1 & The robot shall be capable of being issued a stop command wirelessly. & Demonstration & The robot will show the ability to be stopped remotely. & SH, QS & TBC \\[4pt]
+
+11.2 & The robot shall have a form of easily accessible emergency shutdown button or switch. & Inspection & Emergency stop button is present, labelled, and accessible. & ZP, SH & TBC \\[4pt]
+
+12.2 & Electrical design and maintenance shall comply with lab risk assessment. & Demonstration & The power supply and batteries shall comply with the risk assessment by design and when inspected. & AB, ZP & TBC \\
+
+\end{longtable}
+
+
+
+
+%%%%%%%%%%%%%%%%%% END MATTER %%%%%%%%%%%%%%%%%%
+\end{landscape}
+\end{document}
