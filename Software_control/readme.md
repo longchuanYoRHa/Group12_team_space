@@ -20,7 +20,7 @@ This directory contains third-party ROS2 packages cloned from Git repositories. 
 - `mycobot_ws/` - Robotic arm control related packages
 - `rplidar_ros/` - RPLIDAR LiDAR driver package
 
-**Note**: These packages need to be obtained via `git clone` and then compiled using `colcon build`.
+**Note**: These packages usually need to be obtained via `git clone` and then compiled using `colcon build`.
 
 ### documents/
 **Test Data and Documentation Directory**
@@ -33,3 +33,9 @@ This directory contains various data and documents generated during project test
 - **Other Test Data** - Other relevant files generated during testing
 
 These documents and data are used to record and verify system operation status, facilitating problem diagnosis and system analysis.
+
+### Workspace_folder/
+
+**test workspaces, can be directly build and run**
+
+this is a late created folder for direct build and test without the need for copy packages
