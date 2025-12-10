@@ -10,62 +10,43 @@ gantt
     excludes    weekends
 
     section CW1 - Workplace Charter
-    Charter Development    : cw1, 2025-10-06, 9d
-    CW1 Submission        : milestone, cw1_due, 2025-10-17, 0d
+    Charter Development    :done, cw1, 2025-10-06, 9d
+    CW1 Submission        :done, milestone, cw1_due, 2025-10-17, 0d
 
     section CW2 - Initial CPD Portfolio
-    CPD Portfolio Work     : cw2, 2025-10-17, 10d
-    CW2 Submission        : milestone, cw2_due, 2025-10-31, 0d
+    CPD Portfolio Work     :done, cw2, 2025-10-17, 10d
+    CW2 Submission        :done, milestone, cw2_due, 2025-10-31, 0d
 
     section CW3 - Design Requirement Analysis
-    Requirements Analysis  : crit, cw3, 2025-10-31, 10d
-    CW3 Submission        : milestone, cw3_due, 2025-11-14, 0d
+    Requirements Analysis  :done, crit, cw3, 2025-10-31, 10d
+    CW3 Submission        :done, milestone, cw3_due, 2025-11-14, 0d
 
     section CW4 - Preliminary Design Review
     Design Development     : crit, cw4, 2025-11-14, 20d
     CW4 Submission        : milestone, cw4_due, 2025-12-12, 0d
 
     section CW5 - Technical Competency Assessment
-    Technical Assessment   : crit, cw5, 2025-11-14, 20d
-    CW5 Submission        : milestone, cw5_due, 2025-12-12, 0d
+    Technical Assessment   : crit, cw5, 2025-11-14, 23d
+    CW5 Submission        : milestone, cw5_due, 2025-12-17, 0d
 ```
 
 ## General goal of the project
 
-Using the given Leo Rover and the robotic arm, build a rover that can navigate through maze and able to pick up the objects in the maze.
+Using the given Leo Rover and the myCobot 280pi robotic arm, build a rover that can navigate through random environment and able to pick up the coloured objects and sort them into the corresponding coloured bins in the environment.
 
 ## Git workspace structure
 
-- [Mechanical_design](Mechanical_design): Mechanical design of the rover and the robotic arm , with some general draft and the design requirements.
-- [Software_control](Software_control): Software control of the rover and the robotic arm, with some general glance and the software control requirements.
-- [CW1_workplace_charter](CW1_workplace_charter)
+- [Mechanical_design](Mechanical_design): Mechanical design of modification for chassis and the robotic arm, and linking structures with some general draft and the design analysis.
+- [Software_control](Software_control): Software control of the rover and the robotic arm, with some general glance and the software control analysis.
+- [Equipment](Equipment): Equipment datasheets
+- [Manipulator](Manipulator): Software control of the robotic arm, with some general glance and the software control analysis.
+- [Vision](Vision): Vision related code of the rover, with some general glance and the vision system analysis.
+- [CW1_workplace_charter](CW1_workplace_charter): Workplace charter of the team, with the statement of purpose and the statements of principles and commitments.
+- [CW3_design_requirements_analysis](CW3_design_requirements_analysis): Design requirements analysis of the project, containing related requirements, support documents and draft of the design requirements analysis.
+- [CW4_preliminary_design_review](CW4_preliminary_design_review): Preliminary design review of the project, containing the preliminary design review report and the block diagrams.
+
+- inventory: inventory of the equipment and the parts, with the datasheets and the drawings.
+
 
 ## Recent Tasks
 
-**Chassis assembly** 
-
-Problems: 
-
-- the suspention is still loose
-- the baring of one wheel is not tight enough
-
-solved：
-- missing components for connecting the wheel structure to the chassis.
-- wrong port on the given Powerbox
-
-**Remote connection with the rover(done)** 
-
-**ROS example run(done)**
-
-**Joystick control**
-
-problems:
-
-- joystick mapping yaml file is not working
-(changing the first line of the yaml file to the correct mapping)
-
-**sensor test(done)**
-
-**NUC setup**
-
-**robot arm test**
