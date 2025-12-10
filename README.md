@@ -50,3 +50,21 @@ Using the given Leo Rover and the myCobot 280pi robotic arm, build a rover that 
 
 ## Recent Tasks
 
+**Robot arm test**:
+
+- trying to connect to the nuc (by either hotspot or ethernet), try bypassing the need of inserting password for arm to connect to the nuc every power on.
+- test on controlling gripper to grab and release the object.
+
+**Chassis navigation test**:
+
+- setup the Nav2 and slam_toolbox on nuc and able to run tb3 demo.
+- find and tested auto exploration algorithm to navigate the rover through the environment and map the environment.
+- able to connect chassis to the nuc hotspot and able to see rover topics on nuc and check the rover's state in rviz.
+
+**Vision system test**:
+
+- tried YOLOv8 on NUC (without NVIDIA GPU) to detect the object and the colour of the object at 60fps.
+
+**Mechanical design**:
+
+- finished designing the first version of the chassis modification to connect the other components to the chassis.
