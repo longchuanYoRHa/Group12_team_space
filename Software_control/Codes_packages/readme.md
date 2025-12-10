@@ -1,1 +1,0 @@
-This folder contains the codes and packages for the software control.
