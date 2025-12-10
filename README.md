@@ -36,6 +36,8 @@ Using the given Leo Rover and the myCobot 280pi robotic arm, build a rover that 
 
 ## Git workspace structure
 
+**Note**: all the research and analysis documents are shift to teams OneNote workspace. Gitlab is mainly used for the code and design files.
+
 - [Mechanical_design](Mechanical_design): Mechanical design of modification for chassis and the robotic arm, and linking structures with some general draft and the design analysis.
 - [Software_control](Software_control): Software control of the rover and the robotic arm, with some general glance and the software control analysis.
 - [Equipment](Equipment): Equipment datasheets
