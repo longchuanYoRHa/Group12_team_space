@@ -105,7 +105,7 @@ def generate_launch_description():
             '-p', 'odom_frame:=odom',
             '-p', 'provide_odom_frame:=true',
             '-p', 'use_odom:=false',
-            '-p', 'scan_topic:=/scan',
+            '-p', 'scan_topic:=/scan_filtered',
             '--log-level', 'slam_toolbox:=debug'
         ]
     )
@@ -117,6 +117,7 @@ def generate_launch_description():
         ),
         launch_arguments={
             'use_sim_time': use_sim_time,
+            'scan_topic': '/scan_filtered',
         }.items()
     )
 
@@ -143,15 +144,13 @@ def generate_launch_description():
 
     # launch rviz with custom config
     rviz_config_file = PathJoinSubstitution(
-        [real_nav_test_pkg_dir, 'rviz', 'test_config.rviz']
+        [real_nav_test_pkg_dir, 'rviz', 'nav2_default_view.rviz']
     )
     rviz_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             PathJoinSubstitution([nav2_bringup_dir, 'launch', 'rviz_launch.py'])
         ),
         launch_arguments={
-            'namespace': 'leo',
-            'use_namespace': 'true',
             'use_sim_time': use_sim_time,
             'rviz_config': rviz_config_file,
         }.items()
@@ -185,7 +184,7 @@ def generate_launch_description():
 
     # Launch laser filter after transform is published
     laser_filter_delayed = TimerAction(
-        period=7.0,  # Wait for transform to be established
+        period=5.0,  # Wait for transform to be established
         actions=[laser_filter_node]
     )
 
