@@ -29,6 +29,7 @@ def generate_launch_description():
     # Get package directories
     rplidar_pkg_dir = FindPackageShare('rplidar_ros')
     nav2_bringup_dir = FindPackageShare('nav2_bringup')
+    real_nav_test_pkg_dir = FindPackageShare('real_Nav_test')
     explore_lite_launch = PathJoinSubstitution(
         [FindPackageShare('explore_lite'), 'launch', 'explore.launch.py']
     )
@@ -70,6 +71,17 @@ def generate_launch_description():
         ],
         output='screen',
         condition=IfCondition(PythonExpression(["'", lidar_connected_config, "' == 'true'"]))
+    )
+
+    laser_filter_node = Node(
+        package='laser_filters',
+        executable='scan_to_scan_filter_chain',
+        name='laser_filter',
+        parameters=[PathJoinSubstitution([real_nav_test_pkg_dir, 'config', 'scan_filter.yaml'])],
+        remappings=[
+            ('scan', '/scan'),
+            ('scan_filtered', '/scan_filtered')
+        ]
     )
 
     # 4. Launch SLAM toolbox node with nav2_bringup default config and override specific parameters
@@ -129,6 +141,27 @@ def generate_launch_description():
         }.items()
     )
 
+    # launch rviz with custom config
+    rviz_config_file = PathJoinSubstitution(
+        [real_nav_test_pkg_dir, 'rviz', 'test_config.rviz']
+    )
+    rviz_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            PathJoinSubstitution([nav2_bringup_dir, 'launch', 'rviz_launch.py'])
+        ),
+        launch_arguments={
+            'namespace': 'leo',
+            'use_namespace': 'true',
+            'use_sim_time': use_sim_time,
+            'rviz_config': rviz_config_file,
+        }.items()
+    )
+
+    rviz_launch_delayed = TimerAction(
+        period=18.0,  # Give rviz time to complete
+        actions=[rviz_launch]
+    )
+
     # Sequence the actions:
     # 1. Start lidar
     # 2. Wait for /scan (delayed after lidar starts)
@@ -148,6 +181,12 @@ def generate_launch_description():
     static_tf_delayed = TimerAction(
         period=5.0,  # Wait a bit more to ensure scan is publishing
         actions=[static_tf_base_to_laser],
+    )
+
+    # Launch laser filter after transform is published
+    laser_filter_delayed = TimerAction(
+        period=7.0,  # Wait for transform to be established
+        actions=[laser_filter_node]
     )
 
     # Launch SLAM and Nav2 after transform is published
@@ -178,6 +217,8 @@ def generate_launch_description():
         period=15.0,  # Give activate time to complete
         actions=[explore_launch]
     )
+
+    
 
     return LaunchDescription([
         # Launch arguments
@@ -212,6 +253,9 @@ def generate_launch_description():
         # Publish static transform
         static_tf_delayed,
         
+        # Launch laser filter
+        laser_filter_delayed,
+        
         # Launch SLAM toolbox
         slam_toolbox_delayed,
         
@@ -226,5 +270,8 @@ def generate_launch_description():
         
         # Launch explore
         explore_launch_delayed,
+        
+        # Launch rviz
+        rviz_launch_delayed,
     ])
 

@@ -11,13 +11,14 @@
   <depend>launch</depend>
   <depend>launch_ros</depend>
   <depend>robot_state_publisher</depend>
-  <depend>joint_state_publisher</depend>
   <depend>ros_gz_sim</depend>
-  <depend>ros_gz_bridge</depend>
-  <depend>ros_gz_image</depend>
+  <depend>gz_ros2_control</depend>
   <depend>controller_manager</depend>
   <depend>ros2_control</depend>
   <depend>ros2_controllers</depend>
+  <depend>joint_trajectory_controller</depend>
+  <depend>position_controllers</depend>
+  <depend>joint_state_broadcaster</depend>
   <depend>xacro</depend>
 
   <test_depend>ament_copyright</test_depend>
@@ -26,7 +27,6 @@
   <test_depend>python3-pytest</test_depend>
 
   <exec_depend>mycobot_description</exec_depend>
-  <exec_depend>mycobot_gazebo</exec_depend>
 
   
   <export>

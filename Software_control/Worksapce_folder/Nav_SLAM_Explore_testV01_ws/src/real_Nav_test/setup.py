@@ -20,6 +20,9 @@ setup(
         # Install config files
         (os.path.join('share', package_name, 'config'),
          glob('config/*.yaml')),
+
+         (os.path.join('share', package_name, 'config'),
+         glob('rviz/*.rviz')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
