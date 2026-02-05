@@ -83,38 +83,33 @@ def generate_launch_description():
     # nav2_bringup uses mapper_params_online_sync.yaml from slam_toolbox package as default
     # when slam_toolbox params are not in nav2_params.yaml
     slam_toolbox_params_file = PathJoinSubstitution(
-        [FindPackageShare('slam_toolbox'), 'config', 'mapper_params_online_sync.yaml']
+        [real_nav_test_pkg_dir, 'config', 'mapper_params_online_async.yaml']
     )
     
     slam_toolbox_node = Node(
         package='slam_toolbox',
         executable='async_slam_toolbox_node',
         name='slam_toolbox',
-        output='screen',
         parameters=[slam_toolbox_params_file],  # Load nav2_bringup default config
-        arguments=[
-            '--ros-args',
-            '-p', 'use_sim_time:=false',
-            '-p', 'base_frame:=base_link',
-            '-p', 'map_frame:=map',
-            '-p', 'odom_frame:=odom',
-            '-p', 'provide_odom_frame:=true',
-            '-p', 'use_odom:=false',
-            '-p', 'scan_topic:=/scan_filtered',
-            '--log-level', 'slam_toolbox:=debug'
-        ]
+        output='screen',
     )
 
     # Launch nav2_bringup navigation_launch.py
+    nav2_params_file = PathJoinSubstitution([real_nav_test_pkg_dir, 'config', 'nav2_params.yaml'])
+
     nav2_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             PathJoinSubstitution([nav2_bringup_dir, 'launch', 'navigation_launch.py'])
         ),
         launch_arguments={
             'use_sim_time': use_sim_time,
-            'scan_topic': '/scan_filtered',
+            'params_file': nav2_params_file,
+            # 如果你用 namespace，也可以一起传：
+            # 'namespace': LaunchConfiguration('namespace'),
+            # 'autostart': 'True',
         }.items()
     )
+
 
     # 5. Configure and activate slam_toolbox lifecycle
     # First configure
