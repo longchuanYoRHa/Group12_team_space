@@ -76,12 +76,7 @@ def generate_launch_description():
     laser_filter_node = Node(
         package='laser_filters',
         executable='scan_to_scan_filter_chain',
-        name='laser_filter',
         parameters=[PathJoinSubstitution([real_nav_test_pkg_dir, 'config', 'scan_filter.yaml'])],
-        remappings=[
-            ('scan', '/scan'),
-            ('scan_filtered', '/scan_filtered')
-        ]
     )
 
     # 4. Launch SLAM toolbox node with nav2_bringup default config and override specific parameters
