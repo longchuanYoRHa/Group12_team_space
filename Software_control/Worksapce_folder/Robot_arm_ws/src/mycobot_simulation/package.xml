@@ -1,0 +1,35 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>mycobot_simulation</name>
+  <version>0.0.0</version>
+  <description>TODO: Package description</description>
+  <maintainer email="2674312287@qq.com">student21</maintainer>
+  <license>TODO: License declaration</license>
+
+  <depend>rclpy</depend>
+  <depend>launch</depend>
+  <depend>launch_ros</depend>
+  <depend>robot_state_publisher</depend>
+  <depend>ros_gz_sim</depend>
+  <depend>gz_ros2_control</depend>
+  <depend>controller_manager</depend>
+  <depend>ros2_control</depend>
+  <depend>ros2_controllers</depend>
+  <depend>joint_trajectory_controller</depend>
+  <depend>position_controllers</depend>
+  <depend>joint_state_broadcaster</depend>
+  <depend>xacro</depend>
+
+  <test_depend>ament_copyright</test_depend>
+  <test_depend>ament_flake8</test_depend>
+  <test_depend>ament_pep257</test_depend>
+  <test_depend>python3-pytest</test_depend>
+
+  <exec_depend>mycobot_description</exec_depend>
+
+  
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

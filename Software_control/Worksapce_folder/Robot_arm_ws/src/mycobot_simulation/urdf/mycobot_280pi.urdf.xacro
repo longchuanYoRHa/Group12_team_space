@@ -1,0 +1,133 @@
+# mycobot_simulation/urdf/mycobot_280_pi_gazebo.urdf.xacro
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="mycobot_280_pi">
+  
+  <!-- 包含原始 URDF -->
+  <xacro:include filename="$(find mycobot_description)/urdf/mycobot_280_pi/mycobot_280_pi_adaptive_gripper.urdf"/>
+
+  <!-- Gazebo 插件：ROS 2 Control -->
+  <gazebo>
+    <plugin filename="gz_ros2_control-system" name="gz_ros2_control::GazeboSimROS2ControlPlugin">
+      <parameters>$(find mycobot_simulation)/config/ros2_controllers.yaml</parameters>
+      <ros>
+        <remapping>/controller_manager/robot_description:=/robot_description</remapping>
+      </ros>
+    </plugin>
+  </gazebo>
+
+  <!-- 为每个关节添加 Gazebo 属性 -->
+  <gazebo reference="g_base">
+    <material>Gazebo/Grey</material>
+    <mu1>0.1</mu1>
+    <mu2>0.1</mu2>
+  </gazebo>
+
+  <gazebo reference="joint1">
+    <material>Gazebo/Blue</material>
+    <mu1>0.1</mu1>
+    <mu2>0.1</mu2>
+  </gazebo>
+
+  <gazebo reference="joint2">
+    <material>Gazebo/Blue</material>
+    <mu1>0.1</mu1>
+    <mu2>0.1</mu2>
+  </gazebo>
+
+  <gazebo reference="joint3">
+    <material>Gazebo/Blue</material>
+    <mu1>0.1</mu1>
+    <mu2>0.1</mu2>
+  </gazebo>
+
+  <gazebo reference="joint4">
+    <material>Gazebo/Blue</material>
+    <mu1>0.1</mu1>
+    <mu2>0.1</mu2>
+  </gazebo>
+
+  <gazebo reference="joint5">
+    <material>Gazebo/Blue</material>
+    <mu1>0.1</mu1>
+    <mu2>0.1</mu2>
+  </gazebo>
+
+  <gazebo reference="joint6">
+    <material>Gazebo/Blue</material>
+    <mu1>0.1</mu1>
+    <mu2>0.1</mu2>
+  </gazebo>
+
+  <!-- ROS 2 Control 配置 -->
+  <ros2_control name="MyCobotSystem" type="system">
+    <hardware>
+      <plugin>gz_ros2_control/GazeboSimSystem</plugin>
+    </hardware>
+
+    <!-- 机械臂关节 -->
+    <joint name="joint2_to_joint1">
+      <command_interface name="position">
+        <param name="min">-2.9321</param>
+        <param name="max">2.9321</param>
+      </command_interface>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+
+    <joint name="joint3_to_joint2">
+      <command_interface name="position">
+        <param name="min">-2.4434</param>
+        <param name="max">2.4434</param>
+      </command_interface>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+
+    <joint name="joint4_to_joint3">
+      <command_interface name="position">
+        <param name="min">-2.6179</param>
+        <param name="max">2.6179</param>
+      </command_interface>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+
+    <joint name="joint5_to_joint4">
+      <command_interface name="position">
+        <param name="min">-2.6179</param>
+        <param name="max">2.6179</param>
+      </command_interface>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+
+    <joint name="joint6_to_joint5">
+      <command_interface name="position">
+        <param name="min">-2.7052</param>
+        <param name="max">2.7925</param>
+      </command_interface>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+
+    <joint name="joint6output_to_joint6">
+      <command_interface name="position">
+        <param name="min">-3.14159</param>
+        <param name="max">3.14159</param>
+      </command_interface>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+
+    <!-- 夹爪关节 -->
+    <joint name="gripper_controller">
+      <command_interface name="position">
+        <param name="min">-0.74</param>
+        <param name="max">0.15</param>
+      </command_interface>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+  </ros2_control>
+
+</robot>

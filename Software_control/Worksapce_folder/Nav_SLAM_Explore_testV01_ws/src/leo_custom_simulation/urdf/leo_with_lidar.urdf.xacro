@@ -1,0 +1,57 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="leo_sim_with_lidar">
+
+  <!-- 1) 直接 include 官方仿真 xacro（不修改官方文件） -->
+  <xacro:include filename="$(find leo_description)/urdf/leo_sim.urdf.xacro"/>
+
+  <!-- 2) 生成官方本体
+       注意：如果官方 leo_sim.urdf.xacro 里面本身就是完整 robot，而不是宏，
+       那么 include 后它已经生成了内容，你就不需要再调用宏。-->
+
+  <!-- 3) 追加一个雷达 link（名字用 laser，与你 TF/SLAM 习惯一致） -->
+  <link name="laser">
+    <inertial>
+      <mass value="0.15"/>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <inertia ixx="1e-4" ixy="0" ixz="0" iyy="1e-4" iyz="0" izz="1e-4"/>
+    </inertial>
+  </link>
+
+  <!-- 4) 固定连接到 base_link（位姿用你之前那组） -->
+  <joint name="base_to_laser" type="fixed">
+    <parent link="base_link"/>
+    <child link="laser"/>
+    <origin xyz="0.2407 0.0 -0.06918" rpy="0 0 0"/>
+  </joint>
+
+  <!-- 5) gz-sim 的 Lidar 传感器：URDF Gazebo 扩展写在 <gazebo> 里
+       topic 建议用 scan，最终桥成 ROS 的 /scan 或 <ns>/scan -->
+  <gazebo reference="laser">
+    <sensor name="lidar" type="gpu_lidar">
+      <always_on>true</always_on>
+      <update_rate>10</update_rate>
+      <visualize>true</visualize>
+
+      <!-- gz transport topic（后面用 ros_gz_bridge 桥接） -->
+      <topic>scan</topic>
+
+      <ray>
+        <scan>
+          <horizontal>
+            <samples>720</samples>
+            <min_angle>-3.14159</min_angle>
+            <max_angle>3.14159</max_angle>
+          </horizontal>
+        </scan>
+        <range>
+          <min>0.12</min>
+          <max>12.0</max>
+        </range>
+      </ray>
+
+      <!-- 很关键：让桥接后的 LaserScan header.frame_id = laser -->
+      <gz_frame_id>laser</gz_frame_id>
+    </sensor>
+  </gazebo>
+
+</robot>
