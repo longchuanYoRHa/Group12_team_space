@@ -4,6 +4,7 @@
   <!-- 1) 直接 include 官方仿真 xacro（不修改官方文件） -->
   <xacro:include filename="$(find leo_description)/urdf/leo_sim.urdf.xacro"/>
 
+
   <!-- 2) 生成官方本体
        注意：如果官方 leo_sim.urdf.xacro 里面本身就是完整 robot，而不是宏，
        那么 include 后它已经生成了内容，你就不需要再调用宏。-->
@@ -23,6 +24,137 @@
     <child link="laser"/>
     <origin xyz="0.2407 0.0 -0.06918" rpy="0 0 0"/>
   </joint>
+
+  <!-- D435i 相机配置（简化版：仅颜色和深度，无IMU） -->
+  <xacro:property name="M_PI" value="3.1415926535897931"/>
+  <xacro:property name="deg_to_rad" value="0.01745329251994329577"/>
+  
+  <!-- 相机参数（与原配置保持一致） -->
+  <xacro:property name="color_width" value="1920"/>
+  <xacro:property name="color_height" value="1080"/>
+  <xacro:property name="color_fps" value="30"/>
+  <xacro:property name="color_fov" value="69.4"/>
+  
+  <xacro:property name="depth_width" value="1280"/>
+  <xacro:property name="depth_height" value="720"/>
+  <xacro:property name="depth_fps" value="30"/>
+  <xacro:property name="depth_fov" value="85.2"/>
+  
+  <!-- 相机本体 link -->
+  <link name="D435i_camera_link">
+    <inertial>
+      <mass value="0.564"/>
+      <origin xyz="0 0 0"/>
+      <inertia ixx="0.003881243" ixy="0.0" ixz="0.0" iyy="0.000498940" iyz="0.0" izz="0.003879257"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.02505 0.090 0.025"/>
+      </geometry>
+      <material name="camera_aluminum">
+        <color rgba="0.5 0.5 0.5 1"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.02505 0.090 0.025"/>
+      </geometry>
+    </collision>
+  </link>
+  
+  <!-- 相机安装到 base_link -->
+  <joint name="base_to_D435i_camera" type="fixed">
+    <parent link="base_link"/>
+    <child link="D435i_camera_link"/>
+    <origin xyz="0.0 0.5 0.1" rpy="0.0 0.0 0.0"/>
+  </joint>
+  
+  <!-- 深度相机 frame -->
+  <joint name="D435i_camera_depth_joint" type="fixed">
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <parent link="D435i_camera_link"/>
+    <child link="D435i_camera_depth_frame"/>
+  </joint>
+  <link name="D435i_camera_depth_frame"/>
+  
+  <joint name="D435i_camera_depth_optical_joint" type="fixed">
+    <origin xyz="0 0 0" rpy="${-M_PI/2} 0 ${-M_PI/2}"/>
+    <parent link="D435i_camera_depth_frame"/>
+    <child link="D435i_camera_depth_optical_frame"/>
+  </joint>
+  <link name="D435i_camera_depth_optical_frame"/>
+  
+  <!-- 颜色相机 frame -->
+  <joint name="D435i_camera_color_joint" type="fixed">
+    <origin xyz="0 0.015 0" rpy="0 0 0"/>
+    <parent link="D435i_camera_depth_frame"/>
+    <child link="D435i_camera_color_frame"/>
+  </joint>
+  <link name="D435i_camera_color_frame"/>
+  
+  <joint name="D435i_camera_color_optical_joint" type="fixed">
+    <origin xyz="0 0 0" rpy="${-M_PI/2} 0 ${-M_PI/2}"/>
+    <parent link="D435i_camera_color_frame"/>
+    <child link="D435i_camera_color_optical_frame"/>
+  </joint>
+  <link name="D435i_camera_color_optical_frame"/>
+  
+  <!-- Gazebo 颜色相机传感器 -->
+  <gazebo reference="D435i_camera_link">
+    <sensor name="D435i_camera_color" type="camera">
+      <camera>
+        <horizontal_fov>${color_fov * deg_to_rad}</horizontal_fov>
+        <image>
+          <width>${color_width}</width>
+          <height>${color_height}</height>
+          <format>RGB_INT8</format>
+        </image>
+        <clip>
+          <near>0.1</near>
+          <far>100</far>
+        </clip>
+        <noise>
+          <type>gaussian</type>
+          <mean>0.0</mean>
+          <stddev>0.007</stddev>
+        </noise>
+      </camera>
+      <always_on>true</always_on>
+      <update_rate>${color_fps}</update_rate>
+      <visualize>false</visualize>
+      <gz_frame_id>D435i_camera_color_optical_frame</gz_frame_id>
+      <topic>D435i_camera/color/image_raw</topic>
+    </sensor>
+  </gazebo>
+  
+  <!-- Gazebo 深度相机传感器 -->
+  <gazebo reference="D435i_camera_link">
+    <sensor name="D435i_camera_depth" type="depth_camera">
+      <camera>
+        <horizontal_fov>${depth_fov * deg_to_rad}</horizontal_fov>
+        <image>
+          <width>${depth_width}</width>
+          <height>${depth_height}</height>
+        </image>
+        <clip>
+          <near>0.1</near>
+          <far>10.0</far>
+        </clip>
+        <noise>
+          <type>gaussian</type>
+          <mean>0.0</mean>
+          <stddev>0.100</stddev>
+        </noise>
+      </camera>
+      <always_on>true</always_on>
+      <update_rate>${depth_fps}</update_rate>
+      <visualize>false</visualize>
+      <gz_frame_id>D435i_camera_depth_optical_frame</gz_frame_id>
+      <topic>D435i_camera/depth/image_raw</topic>
+    </sensor>
+  </gazebo>
 
   <!-- 5) gz-sim 的 Lidar 传感器：URDF Gazebo 扩展写在 <gazebo> 里
        topic 建议用 scan，最终桥成 ROS 的 /scan 或 <ns>/scan -->
