@@ -54,6 +54,90 @@ Control explore/nav2, call detectors, call manipulation actions
 
 3. State Machine (FSM) Recommended Version
 
+3.0 State Flow Diagram
+
+The following diagram illustrates the complete state machine workflow:
+
+```mermaid
+stateDiagram-v2
+    [*] --> INIT: System Start
+    
+    INIT --> EXPLORE: System Ready\n(Save home_pose)
+    
+    EXPLORE --> OBJECT_FOUND: Object Detected\n(Stable N frames)\n(cargo_state=EMPTY)
+    EXPLORE --> RESUME_EXPLORE_FOR_BIN: Resume After Stow\n(cargo_state=HAS_OBJECT)
+    
+    OBJECT_FOUND --> PAUSE_EXPLORE: Lock Object Pose
+    
+    PAUSE_EXPLORE --> NAV_TO_OBJECT_PREGRASP: Cancel Nav2 Goal\nStop Explore\n(cargo_state=EMPTY)
+    PAUSE_EXPLORE --> NAV_TO_BIN_PREPLACE: Cancel Nav2 Goal\nStop Explore\n(cargo_state=HAS_OBJECT)
+    
+    NAV_TO_OBJECT_PREGRASP --> PRECISION_ALIGN_OBJECT: Nav2 Succeeded
+    NAV_TO_OBJECT_PREGRASP --> EXPLORE: Nav2 Failed
+    
+    PRECISION_ALIGN_OBJECT --> GRASP: Alignment Complete\n(OptionalD435i)
+    
+    GRASP --> STOW_ON_ROBOT: Grasp Success\n(cargo_state=HAS_OBJECT)
+    GRASP --> PRECISION_ALIGN_OBJECT: Grasp Failed\n(Retry < max)
+    GRASP --> EXPLORE: Grasp Failed\n(Retry >= max)\n(Add to blacklist)
+    
+    STOW_ON_ROBOT --> RESUME_EXPLORE_FOR_BIN: Stow Success\n(Enable carry mode)
+    STOW_ON_ROBOT --> GRASP: Stow Failed\n(Retry < max)
+    STOW_ON_ROBOT --> RESUME_EXPLORE_FOR_BIN: Stow Failed\n(Retry >= max)\n(Continue holding)
+    
+    RESUME_EXPLORE_FOR_BIN --> BIN_FOUND: Bin Detected\n(Stable N frames)\n(cargo_state=HAS_OBJECT)
+    
+    BIN_FOUND --> PAUSE_EXPLORE: Lock Bin Pose
+    
+    NAV_TO_BIN_PREPLACE --> PRECISION_ALIGN_BIN: Nav2 Succeeded
+    NAV_TO_BIN_PREPLACE --> RESUME_EXPLORE_FOR_BIN: Nav2 Failed
+    
+    PRECISION_ALIGN_BIN --> PLACE_IN_BIN: Alignment Complete\n(OptionalD435i)
+    
+    PLACE_IN_BIN --> POST_ACTION: Place Success\n(cargo_state=EMPTY)\n(Disable carry mode)
+    PLACE_IN_BIN --> PRECISION_ALIGN_BIN: Place Failed\n(Retry < max)
+    PLACE_IN_BIN --> RESUME_EXPLORE_FOR_BIN: Place Failed\n(Retry >= max)
+    
+    POST_ACTION --> EXPLORE: Return to Exploration
+    POST_ACTION --> [*]: End Task
+```
+
+**State Flow Description:**
+
+1. **Initialization Phase:**
+   - `INIT` → `EXPLORE`: Wait for system ready (TF/SLAM/Nav2), save home_pose
+
+2. **Object Pickup Phase (cargo_state=EMPTY):**
+   - `EXPLORE` → `OBJECT_FOUND`: Object detected with stable confirmation (N frames)
+   - `OBJECT_FOUND` → `PAUSE_EXPLORE`: Lock object pose, prepare for navigation
+   - `PAUSE_EXPLORE` → `NAV_TO_OBJECT_PREGRASP`: Cancel current goal, stop exploration
+   - `NAV_TO_OBJECT_PREGRASP` → `PRECISION_ALIGN_OBJECT`: Navigate to pregrasp position
+   - `PRECISION_ALIGN_OBJECT` → `GRASP`: Optional precision alignment using D435i
+   - `GRASP` → `STOW_ON_ROBOT`: Grasp successful, update cargo_state to HAS_OBJECT
+   - `GRASP` → `EXPLORE`: Grasp failed after retries, add object to blacklist
+
+3. **Storage Phase:**
+   - `STOW_ON_ROBOT` → `RESUME_EXPLORE_FOR_BIN`: Move object to stow pose, enable carry mode
+
+4. **Bin Search Phase (cargo_state=HAS_OBJECT):**
+   - `RESUME_EXPLORE_FOR_BIN` → `BIN_FOUND`: Bin detected with stable confirmation
+   - `BIN_FOUND` → `PAUSE_EXPLORE`: Lock bin pose, prepare for navigation
+   - `PAUSE_EXPLORE` → `NAV_TO_BIN_PREPLACE`: Cancel current goal, stop exploration
+   - `NAV_TO_BIN_PREPLACE` → `PRECISION_ALIGN_BIN`: Navigate to preplace position
+   - `PRECISION_ALIGN_BIN` → `PLACE_IN_BIN`: Optional precision alignment using D435i
+   - `PLACE_IN_BIN` → `POST_ACTION`: Place successful, update cargo_state to EMPTY, disable carry mode
+
+5. **Post-Action Phase:**
+   - `POST_ACTION` → `EXPLORE`: Return to exploration for next object
+   - `POST_ACTION` → `[*]`: End task (optional)
+
+**Key Features:**
+- **Multi-frame confirmation**: Both object and bin detection require N consecutive frames for stability
+- **Retry mechanism**: Grasp, stow, and place actions have retry logic (max 2 retries)
+- **Blacklist**: Failed objects are added to blacklist to avoid repeated attempts
+- **Carry mode**: Nav2 parameters are adjusted when cargo_state=HAS_OBJECT (reduce speed, increase inflation)
+- **Error recovery**: Failed actions trigger appropriate recovery strategies
+
 State List
 
 INIT

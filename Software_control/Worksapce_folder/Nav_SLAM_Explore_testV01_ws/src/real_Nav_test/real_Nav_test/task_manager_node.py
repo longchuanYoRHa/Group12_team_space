@@ -1,7 +1,14 @@
 #!/usr/bin/env python3
 """
-Task Manager State Machine Node
-Implements Explore-Pick-Stow-SearchBin-Place workflow
+任务管理器状态机节点
+实现 Explore-Pick-Stow-SearchBin-Place 完整工作流程
+
+该节点是系统的核心调度器，负责：
+1. 控制探索行为（explore_lite）的启动和停止
+2. 监听物体检测器（object_detector）和回收箱检测器（bin_detector）
+3. 协调 Nav2 导航系统执行目标导航
+4. 调用机械臂操作动作（抓取、存放、放置）
+5. 管理状态转换和错误恢复机制
 """
 
 import rclpy
@@ -18,152 +25,224 @@ import time
 
 
 class CargoState(Enum):
-    """Cargo state enumeration"""
-    EMPTY = "empty"
-    HAS_OBJECT = "has_object"
+    """
+    载物状态枚举
+    用于跟踪机器人当前是否携带物体
+    """
+    EMPTY = "empty"          # 空载状态：机器人未携带物体，可以抓取新物体
+    HAS_OBJECT = "has_object"  # 载物状态：机器人已携带物体，需要寻找回收箱
 
 
 class TaskState(Enum):
-    """Task state enumeration"""
-    INIT = "init"
-    EXPLORE = "explore"
-    OBJECT_FOUND = "object_found"
-    PAUSE_EXPLORE = "pause_explore"
-    NAV_TO_OBJECT_PREGRASP = "nav_to_object_pregrasp"
-    PRECISION_ALIGN_OBJECT = "precision_align_object"
-    GRASP = "grasp"
-    STOW_ON_ROBOT = "stow_on_robot"
-    RESUME_EXPLORE_FOR_BIN = "resume_explore_for_bin"
-    BIN_FOUND = "bin_found"
-    NAV_TO_BIN_PREPLACE = "nav_to_bin_preplace"
-    PRECISION_ALIGN_BIN = "precision_align_bin"
-    PLACE_IN_BIN = "place_in_bin"
-    POST_ACTION = "post_action"
+    """
+    任务状态枚举
+    定义了完整工作流程中的所有状态
+    """
+    INIT = "init"                          # 初始化状态：等待系统就绪
+    EXPLORE = "explore"                    # 探索状态：启动探索，监听物体检测
+    OBJECT_FOUND = "object_found"          # 物体发现状态：检测到可回收物体
+    PAUSE_EXPLORE = "pause_explore"        # 暂停探索状态：停止探索，准备导航
+    NAV_TO_OBJECT_PREGRASP = "nav_to_object_pregrasp"  # 导航到物体预抓取位置
+    PRECISION_ALIGN_OBJECT = "precision_align_object"  # 精确对准物体（可选）
+    GRASP = "grasp"                        # 抓取状态：执行抓取动作
+    STOW_ON_ROBOT = "stow_on_robot"        # 存放状态：将物体移动到车载存放位
+    RESUME_EXPLORE_FOR_BIN = "resume_explore_for_bin"  # 恢复探索寻找回收箱
+    BIN_FOUND = "bin_found"                # 回收箱发现状态：检测到回收箱
+    NAV_TO_BIN_PREPLACE = "nav_to_bin_preplace"  # 导航到回收箱预放置位置
+    PRECISION_ALIGN_BIN = "precision_align_bin"  # 精确对准回收箱（可选）
+    PLACE_IN_BIN = "place_in_bin"          # 放置状态：将物体放入回收箱
+    POST_ACTION = "post_action"            # 后处理状态：任务完成后的处理
 
 
 class TaskManagerNode(Node):
-    """Task Manager State Machine Node"""
+    """
+    任务管理器状态机节点
+    
+    这是系统的核心控制节点，实现了一个完整的状态机来协调：
+    - 探索行为（explore_lite）
+    - 导航系统（Nav2）
+    - 物体检测（object_detector）
+    - 回收箱检测（bin_detector）
+    - 机械臂操作（grasp/stow/place actions）
+    """
     
     def __init__(self):
         super().__init__('task_manager')
         
-        # State variables
-        self.current_state = TaskState.INIT
-        self.cargo_state = CargoState.EMPTY
-        self.home_pose = None
-        self.object_pose = None
-        self.bin_pose = None
-        self.stow_pose = None  # Fixed stow pose in arm_base frame
+        # ========== 状态变量 ==========
+        self.current_state = TaskState.INIT  # 当前任务状态
+        self.cargo_state = CargoState.EMPTY  # 载物状态（空载/载物）
+        self.home_pose = None  # 起始位置，用于任务完成后返回
+        self.object_pose = None  # 检测到的物体位姿（map坐标系）
+        self.bin_pose = None  # 检测到的回收箱位姿（map坐标系）
+        self.stow_pose = None  # 车载存放位姿（arm_base坐标系，固定位置）
         
-        # Detection stability counters
-        self.object_detection_count = 0
-        self.bin_detection_count = 0
-        self.required_detection_frames = 5  # N frames for stable detection
+        # ========== 检测稳定性计数器 ==========
+        # 用于多帧确认，避免误检测
+        self.object_detection_count = 0  # 物体检测连续帧数
+        self.bin_detection_count = 0  # 回收箱检测连续帧数
+        self.required_detection_frames = 5  # 稳定检测所需连续帧数（N帧确认）
         
-        # Retry counters
-        self.grasp_retry_count = 0
-        self.max_grasp_retries = 2
-        self.stow_retry_count = 0
-        self.max_stow_retries = 2
-        self.place_retry_count = 0
-        self.max_place_retries = 2
+        # ========== 重试计数器 ==========
+        # 用于失败恢复机制
+        self.grasp_retry_count = 0  # 抓取重试次数
+        self.max_grasp_retries = 2  # 最大抓取重试次数
+        self.stow_retry_count = 0  # 存放重试次数
+        self.max_stow_retries = 2  # 最大存放重试次数
+        self.place_retry_count = 0  # 放置重试次数
+        self.max_place_retries = 2  # 最大放置重试次数
         
-        # Blacklist for failed objects
-        self.object_blacklist = []
-        self.blacklist_radius = 0.3  # meters
+        # ========== 失败物体黑名单 ==========
+        # 记录抓取失败的物体位置，避免反复尝试
+        self.object_blacklist = []  # 黑名单位置列表
+        self.blacklist_radius = 0.3  # 黑名单半径（米），在此范围内的物体将被忽略
         
-        # Action clients
+        # ========== Action 客户端 ==========
+        # Nav2 导航动作客户端
         self.nav2_client = ActionClient(self, nav2_msgs.NavigateToPose, 'navigate_to_pose')
-        self.nav2_goal_handle = None
+        self.nav2_goal_handle = None  # 当前导航目标句柄
         
-        # Publishers
+        # ========== 发布器 ==========
+        # 控制 explore_lite 的启动/停止（通过 /explore/resume topic）
         self.explore_control_pub = self.create_publisher(
             std_msgs.Bool, 'explore/resume', 10
         )
+        # 发布当前状态（用于监控和调试）
         self.state_pub = self.create_publisher(
             std_msgs.String, 'task_manager/state', 10
         )
+        # 发布载物状态（用于监控和调试）
         self.cargo_state_pub = self.create_publisher(
             std_msgs.String, 'task_manager/cargo_state', 10
         )
         
-        # Subscribers
-        # TODO: Replace with actual object_detector topic
+        # ========== 订阅器 ==========
+        # TODO: 替换为实际的 object_detector topic
+        # 订阅物体检测器发布的物体位姿
         self.object_pose_sub = self.create_subscription(
             geometry_msgs.PoseStamped,
-            'object_detector/object_pose',  # Pseudo topic
+            'object_detector/object_pose',  # 伪代码占位符
             self.object_pose_callback,
             qos_profile_sensor_data
         )
         
-        # TODO: Replace with actual bin_detector topic
+        # TODO: 替换为实际的 bin_detector topic
+        # 订阅回收箱检测器发布的回收箱位姿
         self.bin_pose_sub = self.create_subscription(
             geometry_msgs.PoseStamped,
-            'bin_detector/bin_pose',  # Pseudo topic
+            'bin_detector/bin_pose',  # 伪代码占位符
             self.bin_pose_callback,
             qos_profile_sensor_data
         )
         
-        # TF buffer for coordinate transformations
+        # ========== TF 变换 ==========
+        # 用于坐标系转换（map <-> base_link <-> arm_base 等）
         self.tf_buffer = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
         
-        # Timer for state machine execution
+        # ========== 状态机定时器 ==========
+        # 每 0.1 秒执行一次状态机逻辑（10Hz）
         self.state_timer = self.create_timer(0.1, self.state_machine_callback)
         
-        # Parameters
-        self.declare_parameter('pregrasp_distance', 0.5)  # meters
-        self.declare_parameter('preplace_distance', 0.6)  # meters
-        self.declare_parameter('stow_pose_x', 0.3)
-        self.declare_parameter('stow_pose_y', 0.0)
-        self.declare_parameter('stow_pose_z', 0.2)
+        # ========== 节点参数 ==========
+        self.declare_parameter('pregrasp_distance', 0.5)  # 预抓取距离（米）
+        self.declare_parameter('preplace_distance', 0.6)  # 预放置距离（米）
+        self.declare_parameter('stow_pose_x', 0.3)  # 存放位姿 X 坐标
+        self.declare_parameter('stow_pose_y', 0.0)  # 存放位姿 Y 坐标
+        self.declare_parameter('stow_pose_z', 0.2)  # 存放位姿 Z 坐标
         
-        self.get_logger().info('Task Manager Node initialized')
+        self.get_logger().info('任务管理器节点已初始化')
         
     def object_pose_callback(self, msg):
-        """Callback for object pose detection"""
+        """
+        物体位姿检测回调函数
+        
+        当物体检测器发布新的物体位姿时调用。
+        仅在空载状态且处于探索状态时处理物体检测。
+        使用多帧确认机制避免误检测。
+        
+        Args:
+            msg: geometry_msgs.msg.PoseStamped，物体位姿（map坐标系）
+        """
+        # 只在空载且探索状态下处理物体检测
         if self.cargo_state == CargoState.EMPTY and self.current_state == TaskState.EXPLORE:
-            # Check if object is in blacklist
+            # 检查物体是否在黑名单中（之前抓取失败的位置）
             if self.is_pose_in_blacklist(msg.pose.position):
-                return
+                return  # 忽略黑名单中的物体
             
+            # 更新物体位姿并增加检测计数
             self.object_pose = msg
             self.object_detection_count += 1
             
+            # 达到稳定检测帧数，确认物体发现
             if self.object_detection_count >= self.required_detection_frames:
-                self.get_logger().info('Object found and confirmed!')
+                self.get_logger().info('物体发现并确认！')
                 self.current_state = TaskState.OBJECT_FOUND
                 self.object_detection_count = 0
         else:
+            # 不在正确状态，重置计数器
             self.object_detection_count = 0
     
     def bin_pose_callback(self, msg):
-        """Callback for bin pose detection"""
+        """
+        回收箱位姿检测回调函数
+        
+        当回收箱检测器发布新的回收箱位姿时调用。
+        仅在载物状态且处于寻找回收箱的探索状态时处理。
+        使用多帧确认机制避免误检测。
+        
+        Args:
+            msg: geometry_msgs.msg.PoseStamped，回收箱位姿（map坐标系）
+        """
+        # 只在载物且寻找回收箱状态下处理回收箱检测
         if self.cargo_state == CargoState.HAS_OBJECT and self.current_state == TaskState.RESUME_EXPLORE_FOR_BIN:
+            # 更新回收箱位姿并增加检测计数
             self.bin_pose = msg
             self.bin_detection_count += 1
             
+            # 达到稳定检测帧数，确认回收箱发现
             if self.bin_detection_count >= self.required_detection_frames:
-                self.get_logger().info('Bin found and confirmed!')
+                self.get_logger().info('回收箱发现并确认！')
                 self.current_state = TaskState.BIN_FOUND
                 self.bin_detection_count = 0
         else:
+            # 不在正确状态，重置计数器
             self.bin_detection_count = 0
     
     def is_pose_in_blacklist(self, position):
-        """Check if position is in blacklist"""
+        """
+        检查位置是否在黑名单中
+        
+        用于避免反复尝试抓取失败的物体。
+        
+        Args:
+            position: geometry_msgs.msg.Point，要检查的位置
+        
+        Returns:
+            bool: 如果位置在黑名单半径内返回 True，否则返回 False
+        """
         for blacklist_pos in self.object_blacklist:
+            # 计算欧氏距离
             distance = math.sqrt(
                 (position.x - blacklist_pos.x)**2 +
                 (position.y - blacklist_pos.y)**2
             )
+            # 如果在黑名单半径内，返回 True
             if distance < self.blacklist_radius:
                 return True
         return False
     
     def state_machine_callback(self):
-        """Main state machine execution"""
-        # Publish current state
+        """
+        状态机主回调函数
+        
+        这是状态机的核心执行函数，每 0.1 秒被调用一次。
+        负责：
+        1. 发布当前状态和载物状态（用于监控）
+        2. 根据当前状态调用相应的处理函数
+        3. 执行状态转换逻辑
+        """
+        # ========== 发布状态信息（用于监控和调试）==========
         state_msg = std_msgs.String()
         state_msg.data = self.current_state.value
         self.state_pub.publish(state_msg)
@@ -172,7 +251,8 @@ class TaskManagerNode(Node):
         cargo_msg.data = self.cargo_state.value
         self.cargo_state_pub.publish(cargo_msg)
         
-        # State machine logic
+        # ========== 状态机逻辑分发 ==========
+        # 根据当前状态调用相应的处理函数
         if self.current_state == TaskState.INIT:
             self.handle_init_state()
         elif self.current_state == TaskState.EXPLORE:
@@ -203,14 +283,19 @@ class TaskManagerNode(Node):
             self.handle_post_action_state()
     
     def handle_init_state(self):
-        """Handle INIT state"""
-        # Wait for system ready (TF/SLAM/Nav2)
+        """
+        处理初始化状态
+        
+        等待系统就绪（TF变换、SLAM、Nav2），然后保存起始位置并进入探索状态。
+        """
+        # 等待 Nav2 服务器就绪
         if not self.nav2_client.wait_for_server(timeout_sec=1.0):
-            self.get_logger().warn('Waiting for Nav2 server...')
+            self.get_logger().warn('等待 Nav2 服务器...')
             return
         
-        # Save home pose
+        # 保存起始位置（home_pose）
         try:
+            # 获取当前机器人在 map 坐标系中的位姿
             transform = self.tf_buffer.lookup_transform(
                 'map', 'base_link', rclpy.time.Time()
             )
@@ -220,235 +305,341 @@ class TaskManagerNode(Node):
             self.home_pose.pose.position.y = transform.transform.translation.y
             self.home_pose.pose.orientation = transform.transform.rotation
             
-            self.get_logger().info('System ready, home pose saved')
+            self.get_logger().info('系统就绪，起始位置已保存')
+            # 进入探索状态
             self.current_state = TaskState.EXPLORE
         except Exception as e:
-            self.get_logger().warn(f'Waiting for TF: {e}')
+            # TF 变换尚未就绪，继续等待
+            self.get_logger().warn(f'等待 TF 变换: {e}')
     
     def handle_explore_state(self):
-        """Handle EXPLORE state"""
-        # Start/resume explore_lite
+        """
+        处理探索状态
+        
+        启动或恢复 explore_lite 探索行为。
+        物体检测由 object_pose_callback 异步处理。
+        """
+        # 启动/恢复 explore_lite（通过发布 True 到 /explore/resume topic）
         explore_msg = std_msgs.Bool()
         explore_msg.data = True
         self.explore_control_pub.publish(explore_msg)
         
-        # Object detection is handled in callback
-        # State transition happens in object_pose_callback
+        # 注意：物体检测在 object_pose_callback 中异步处理
+        # 状态转换（OBJECT_FOUND）也在回调中触发
     
     def handle_object_found_state(self):
-        """Handle OBJECT_FOUND state"""
-        self.get_logger().info('Object found, transitioning to PAUSE_EXPLORE')
+        """
+        处理物体发现状态
+        
+        当物体被稳定检测到时，立即进入暂停探索状态。
+        """
+        self.get_logger().info('物体发现，转换到暂停探索状态')
         self.current_state = TaskState.PAUSE_EXPLORE
     
     def handle_pause_explore_state(self):
-        """Handle PAUSE_EXPLORE state"""
-        # Cancel Nav2 current goal
+        """
+        处理暂停探索状态
+        
+        取消 Nav2 当前导航目标，停止 explore_lite，准备执行物体抓取任务。
+        此状态用于物体抓取和回收箱放置两个场景。
+        """
+        # 取消 Nav2 当前导航目标
         if self.nav2_goal_handle is not None:
             self.nav2_client.cancel_goal_async(self.nav2_goal_handle)
             self.nav2_goal_handle = None
         
-        # Stop explore_lite
+        # 停止 explore_lite（通过发布 False 到 /explore/resume topic）
         explore_msg = std_msgs.Bool()
         explore_msg.data = False
         self.explore_control_pub.publish(explore_msg)
         
-        # Transition to navigation
-        self.current_state = TaskState.NAV_TO_OBJECT_PREGRASP
+        # 根据载物状态决定下一步
+        # 如果空载，导航到物体；如果载物，导航到回收箱
+        if self.cargo_state == CargoState.EMPTY:
+            self.current_state = TaskState.NAV_TO_OBJECT_PREGRASP
+        else:
+            self.current_state = TaskState.NAV_TO_BIN_PREPLACE
     
     def handle_nav_to_object_pregrasp_state(self):
-        """Handle NAV_TO_OBJECT_PREGRASP state"""
+        """
+        处理导航到物体预抓取位置状态
+        
+        计算物体前方的预抓取位置（保持安全距离，面向物体），
+        然后使用 Nav2 导航到该位置。
+        """
+        # 检查物体位姿是否可用
         if self.object_pose is None:
-            self.get_logger().error('Object pose not available!')
+            self.get_logger().error('物体位姿不可用！')
             self.current_state = TaskState.EXPLORE
             return
         
-        # Generate pregrasp navigation point
+        # 获取预抓取距离参数
         pregrasp_distance = self.get_parameter('pregrasp_distance').value
         
-        # Calculate position at distance from object, facing object
+        # 计算预抓取位置（物体前方，面向物体）
         goal_pose = self.calculate_pregrasp_pose(self.object_pose, pregrasp_distance)
         
-        # Send Nav2 goal
+        # 创建 Nav2 导航目标
         goal_msg = nav2_msgs.NavigateToPose.Goal()
         goal_msg.pose = goal_pose
         
+        # 如果还没有发送目标，发送导航目标
         if self.nav2_goal_handle is None:
-            self.get_logger().info('Sending Nav2 goal to object pregrasp position')
+            self.get_logger().info('发送 Nav2 目标到物体预抓取位置')
             send_goal_future = self.nav2_client.send_goal_async(goal_msg)
             send_goal_future.add_done_callback(self.nav2_goal_response_callback)
         else:
-            # Check goal status (status values: 1=ACCEPTED, 2=EXECUTING, 3=CANCELING, 4=SUCCEEDED, 5=CANCELED, 6=ABORTED)
+            # 检查导航目标状态
+            # 状态值：1=ACCEPTED, 2=EXECUTING, 3=CANCELING, 4=SUCCEEDED, 5=CANCELED, 6=ABORTED
             from rclpy.action import GoalStatus
             status = self.nav2_goal_handle.status
             if status == GoalStatus.STATUS_SUCCEEDED:
-                self.get_logger().info('Reached pregrasp position')
+                # 导航成功，到达预抓取位置
+                self.get_logger().info('已到达预抓取位置')
                 self.nav2_goal_handle = None
                 self.current_state = TaskState.PRECISION_ALIGN_OBJECT
             elif status in [GoalStatus.STATUS_CANCELED, GoalStatus.STATUS_ABORTED]:
-                self.get_logger().warn('Navigation failed, returning to EXPLORE')
+                # 导航失败，返回探索状态
+                self.get_logger().warn('导航失败，返回探索状态')
                 self.nav2_goal_handle = None
                 self.current_state = TaskState.EXPLORE
     
     def handle_precision_align_object_state(self):
-        """Handle PRECISION_ALIGN_OBJECT state (Optional)"""
-        # TODO: Implement precision alignment using D435i
-        # For now, skip to GRASP
-        self.get_logger().info('Precision alignment (pseudo code - skip to GRASP)')
+        """
+        处理精确对准物体状态（可选但推荐）
+        
+        使用 D435i 相机进行厘米级精确对准，确保机械臂可达且误差可控。
+        当前为伪代码实现，直接跳转到抓取状态。
+        """
+        # TODO: 实现使用 D435i 的精确对准逻辑
+        # 当前为伪代码，直接跳转到抓取
+        self.get_logger().info('精确对准（伪代码 - 跳转到抓取）')
         self.current_state = TaskState.GRASP
     
     def handle_grasp_state(self):
-        """Handle GRASP state"""
-        # TODO: Call grasp action (pseudo code)
-        self.get_logger().info('Calling grasp action (pseudo code)')
+        """
+        处理抓取状态
         
-        # Pseudo code: Call grasp_server
+        调用机械臂抓取动作（grasp_server），抓取物体。
+        包含重试机制和失败处理（添加到黑名单）。
+        """
+        # TODO: 调用实际的抓取动作（伪代码）
+        self.get_logger().info('调用抓取动作（伪代码）')
+        
+        # 伪代码：调用 grasp_server
         # grasp_success = self.call_grasp_action(self.object_pose)
-        grasp_success = True  # Placeholder
+        grasp_success = True  # 占位符
         
         if grasp_success:
-            self.get_logger().info('Grasp successful!')
-            self.cargo_state = CargoState.HAS_OBJECT
+            # 抓取成功
+            self.get_logger().info('抓取成功！')
+            self.cargo_state = CargoState.HAS_OBJECT  # 更新载物状态
             self.grasp_retry_count = 0
+            # 进入存放状态
             self.current_state = TaskState.STOW_ON_ROBOT
         else:
+            # 抓取失败，重试
             self.grasp_retry_count += 1
             if self.grasp_retry_count >= self.max_grasp_retries:
-                self.get_logger().warn('Grasp failed after retries, abandoning object')
-                # Add to blacklist
+                # 超过最大重试次数，放弃该物体
+                self.get_logger().warn('抓取失败，超过重试次数，放弃该物体')
+                # 添加到黑名单，避免反复尝试
                 if self.object_pose:
                     self.object_blacklist.append(self.object_pose.pose.position)
                 self.grasp_retry_count = 0
+                # 返回探索状态
                 self.current_state = TaskState.EXPLORE
             else:
-                self.get_logger().info(f'Grasp failed, retrying ({self.grasp_retry_count}/{self.max_grasp_retries})')
-                # Retry precision alignment
+                # 重试精确对准
+                self.get_logger().info(f'抓取失败，重试中 ({self.grasp_retry_count}/{self.max_grasp_retries})')
                 self.current_state = TaskState.PRECISION_ALIGN_OBJECT
     
     def handle_stow_on_robot_state(self):
-        """Handle STOW_ON_ROBOT state"""
-        # TODO: Call stow action (pseudo code)
-        self.get_logger().info('Calling stow action (pseudo code)')
+        """
+        处理车载存放状态（关键新增状态）
         
-        # Pseudo code: Call stow_server
+        将抓取的物体移动到车载存放位（stow pose）。
+        成功后启用携带模式（调整 Nav2 参数），然后进入寻找回收箱的探索状态。
+        """
+        # TODO: 调用实际的存放动作（伪代码）
+        self.get_logger().info('调用存放动作（伪代码）')
+        
+        # 伪代码：调用 stow_server
         # stow_success = self.call_stow_action()
-        stow_success = True  # Placeholder
+        stow_success = True  # 占位符
         
         if stow_success:
-            self.get_logger().info('Stow successful!')
+            # 存放成功
+            self.get_logger().info('存放成功！')
             self.stow_retry_count = 0
-            # Adjust Nav2 parameters for carry mode
+            # 启用携带模式（调整 Nav2 参数：降低速度，增大膨胀半径）
             self.adjust_nav2_for_carry_mode(True)
+            # 进入寻找回收箱的探索状态
             self.current_state = TaskState.RESUME_EXPLORE_FOR_BIN
         else:
+            # 存放失败，重试
             self.stow_retry_count += 1
             if self.stow_retry_count >= self.max_stow_retries:
-                self.get_logger().warn('Stow failed after retries')
-                # Option: place back or continue holding
+                # 超过最大重试次数
+                self.get_logger().warn('存放失败，超过重试次数')
+                # 选项：放回桌面或继续夹持
                 self.stow_retry_count = 0
-                # For now, continue holding and proceed
+                # 当前策略：继续夹持并继续执行
                 self.current_state = TaskState.RESUME_EXPLORE_FOR_BIN
             else:
-                self.get_logger().info(f'Stow failed, retrying ({self.stow_retry_count}/{self.max_stow_retries})')
-                # Retry from grasp state
+                # 重试抓取
+                self.get_logger().info(f'存放失败，重试中 ({self.stow_retry_count}/{self.max_stow_retries})')
                 self.current_state = TaskState.GRASP
     
     def handle_resume_explore_for_bin_state(self):
-        """Handle RESUME_EXPLORE_FOR_BIN state"""
-        # Resume explore_lite
+        """
+        处理恢复探索寻找回收箱状态
+        
+        恢复 explore_lite 探索行为，将"回收箱"作为关键目标。
+        回收箱检测由 bin_pose_callback 异步处理。
+        """
+        # 恢复 explore_lite（通过发布 True 到 /explore/resume topic）
         explore_msg = std_msgs.Bool()
         explore_msg.data = True
         self.explore_control_pub.publish(explore_msg)
         
-        # Bin detection is handled in callback
-        # State transition happens in bin_pose_callback
+        # 注意：回收箱检测在 bin_pose_callback 中异步处理
+        # 状态转换（BIN_FOUND）也在回调中触发
     
     def handle_bin_found_state(self):
-        """Handle BIN_FOUND state"""
-        self.get_logger().info('Bin found, transitioning to PAUSE_EXPLORE')
+        """
+        处理回收箱发现状态
+        
+        当回收箱被稳定检测到时，立即进入暂停探索状态。
+        """
+        self.get_logger().info('回收箱发现，转换到暂停探索状态')
         self.current_state = TaskState.PAUSE_EXPLORE
     
     def handle_nav_to_bin_preplace_state(self):
-        """Handle NAV_TO_BIN_PREPLACE state"""
+        """
+        处理导航到回收箱预放置位置状态
+        
+        计算回收箱前方的预放置位置（保持安全距离，面向回收箱），
+        然后使用 Nav2 导航到该位置。
+        """
+        # 检查回收箱位姿是否可用
         if self.bin_pose is None:
-            self.get_logger().error('Bin pose not available!')
+            self.get_logger().error('回收箱位姿不可用！')
             self.current_state = TaskState.RESUME_EXPLORE_FOR_BIN
             return
         
-        # Generate preplace navigation point
+        # 获取预放置距离参数
         preplace_distance = self.get_parameter('preplace_distance').value
         
-        # Calculate position at distance from bin, facing bin
+        # 计算预放置位置（回收箱前方，面向回收箱）
         goal_pose = self.calculate_pregrasp_pose(self.bin_pose, preplace_distance)
         
-        # Send Nav2 goal
+        # 创建 Nav2 导航目标
         goal_msg = nav2_msgs.NavigateToPose.Goal()
         goal_msg.pose = goal_pose
         
+        # 如果还没有发送目标，发送导航目标
         if self.nav2_goal_handle is None:
-            self.get_logger().info('Sending Nav2 goal to bin preplace position')
+            self.get_logger().info('发送 Nav2 目标到回收箱预放置位置')
             send_goal_future = self.nav2_client.send_goal_async(goal_msg)
             send_goal_future.add_done_callback(self.nav2_goal_response_callback)
         else:
-            # Check goal status
+            # 检查导航目标状态
             from rclpy.action import GoalStatus
             status = self.nav2_goal_handle.status
             if status == GoalStatus.STATUS_SUCCEEDED:
-                self.get_logger().info('Reached preplace position')
+                # 导航成功，到达预放置位置
+                self.get_logger().info('已到达预放置位置')
                 self.nav2_goal_handle = None
                 self.current_state = TaskState.PRECISION_ALIGN_BIN
             elif status in [GoalStatus.STATUS_CANCELED, GoalStatus.STATUS_ABORTED]:
-                self.get_logger().warn('Navigation failed, returning to EXPLORE')
+                # 导航失败，返回寻找回收箱状态
+                self.get_logger().warn('导航失败，返回寻找回收箱状态')
                 self.nav2_goal_handle = None
                 self.current_state = TaskState.RESUME_EXPLORE_FOR_BIN
     
     def handle_precision_align_bin_state(self):
-        """Handle PRECISION_ALIGN_BIN state"""
-        # TODO: Implement precision alignment using D435i
-        # For now, skip to PLACE
-        self.get_logger().info('Precision alignment bin (pseudo code - skip to PLACE)')
+        """
+        处理精确对准回收箱状态（推荐）
+        
+        使用 D435i 相机进行精确对准，确保回收箱在相机视野中心、距离合适。
+        当前为伪代码实现，直接跳转到放置状态。
+        """
+        # TODO: 实现使用 D435i 的精确对准逻辑
+        # 当前为伪代码，直接跳转到放置
+        self.get_logger().info('精确对准回收箱（伪代码 - 跳转到放置）')
         self.current_state = TaskState.PLACE_IN_BIN
     
     def handle_place_in_bin_state(self):
-        """Handle PLACE_IN_BIN state"""
-        # TODO: Call place action (pseudo code)
-        self.get_logger().info('Calling place action (pseudo code)')
+        """
+        处理放置到回收箱状态
         
-        # Pseudo code: Call place_server
+        执行放置动作（从存放位取出物体 → 放入回收箱）。
+        包含重试机制和失败处理。
+        """
+        # TODO: 调用实际的放置动作（伪代码）
+        self.get_logger().info('调用放置动作（伪代码）')
+        
+        # 伪代码：调用 place_server
         # place_success = self.call_place_action(self.bin_pose)
-        place_success = True  # Placeholder
+        place_success = True  # 占位符
         
         if place_success:
-            self.get_logger().info('Place successful!')
-            self.cargo_state = CargoState.EMPTY
+            # 放置成功
+            self.get_logger().info('放置成功！')
+            self.cargo_state = CargoState.EMPTY  # 更新载物状态为空载
             self.place_retry_count = 0
-            # Restore Nav2 parameters
+            # 恢复 Nav2 参数（禁用携带模式）
             self.adjust_nav2_for_carry_mode(False)
+            # 进入后处理状态
             self.current_state = TaskState.POST_ACTION
         else:
+            # 放置失败，重试
             self.place_retry_count += 1
             if self.place_retry_count >= self.max_place_retries:
-                self.get_logger().warn('Place failed after retries, resuming exploration')
+                # 超过最大重试次数，恢复探索
+                self.get_logger().warn('放置失败，超过重试次数，恢复探索')
                 self.place_retry_count = 0
                 self.current_state = TaskState.RESUME_EXPLORE_FOR_BIN
             else:
-                self.get_logger().info(f'Place failed, retrying ({self.place_retry_count}/{self.max_place_retries})')
-                # Retry precision alignment
+                # 重试精确对准
+                self.get_logger().info(f'放置失败，重试中 ({self.place_retry_count}/{self.max_place_retries})')
                 self.current_state = TaskState.PRECISION_ALIGN_BIN
     
     def handle_post_action_state(self):
-        """Handle POST_ACTION state"""
-        # Option: Return to exploration or return home
-        self.get_logger().info('Post action: returning to exploration')
+        """
+        处理后处理状态
+        
+        任务完成后的处理选项：
+        - 返回探索状态继续寻找下一个物体
+        - 返回起始位置（home）
+        - 结束任务
+        当前实现：返回探索状态。
+        """
+        # 选项：返回探索或返回起始位置
+        self.get_logger().info('后处理：返回探索状态')
         self.current_state = TaskState.EXPLORE
     
     def calculate_pregrasp_pose(self, target_pose, distance):
-        """Calculate pregrasp/preplace pose at distance from target, facing target"""
+        """
+        计算预抓取/预放置位姿
+        
+        在目标前方计算一个位置，保持指定距离，面向目标。
+        用于物体抓取和回收箱放置的导航目标计算。
+        
+        Args:
+            target_pose: geometry_msgs.msg.PoseStamped，目标位姿（map坐标系）
+            distance: float，保持的距离（米）
+        
+        Returns:
+            geometry_msgs.msg.PoseStamped: 预抓取/预放置位姿（map坐标系）
+        """
         goal_pose = geometry_msgs.PoseStamped()
         goal_pose.header.frame_id = 'map'
         goal_pose.header.stamp = self.get_clock().now().to_msg()
         
-        # Calculate direction vector from target to robot (simplified: assume robot at origin)
-        # In practice, get current robot pose
+        # 计算从目标指向机器人的方向向量
+        # 获取当前机器人位姿
         try:
             transform = self.tf_buffer.lookup_transform(
                 'map', 'base_link', rclpy.time.Time()
@@ -456,93 +647,137 @@ class TaskManagerNode(Node):
             robot_x = transform.transform.translation.x
             robot_y = transform.transform.translation.y
         except:
+            # TF 变换失败，使用默认值
             robot_x = 0.0
             robot_y = 0.0
         
-        # Vector from target to robot
+        # 计算从目标指向机器人的向量
         dx = robot_x - target_pose.pose.position.x
         dy = robot_y - target_pose.pose.position.y
         dist = math.sqrt(dx*dx + dy*dy)
         
+        # 归一化方向向量
         if dist > 0:
-            # Normalize
             dx /= dist
             dy /= dist
         else:
+            # 如果距离为0，使用默认方向
             dx = 1.0
             dy = 0.0
         
-        # Goal position: target position + distance * direction (toward robot)
+        # 目标位置：目标位置 + 距离 * 方向（朝向机器人）
         goal_pose.pose.position.x = target_pose.pose.position.x + distance * dx
         goal_pose.pose.position.y = target_pose.pose.position.y + distance * dy
         goal_pose.pose.position.z = 0.0
         
-        # Orientation: face target
+        # 朝向：面向目标
         yaw = math.atan2(
             target_pose.pose.position.y - goal_pose.pose.position.y,
             target_pose.pose.position.x - goal_pose.pose.position.x
         )
         
-        # Convert yaw to quaternion
+        # 将 yaw 角转换为四元数（仅绕 Z 轴旋转）
         goal_pose.pose.orientation.z = math.sin(yaw / 2.0)
         goal_pose.pose.orientation.w = math.cos(yaw / 2.0)
         
         return goal_pose
     
     def nav2_goal_response_callback(self, future):
-        """Callback for Nav2 goal response"""
+        """
+        Nav2 目标响应回调函数
+        
+        当 Nav2 接受或拒绝导航目标时调用。
+        
+        Args:
+            future: 包含目标句柄的 Future 对象
+        """
         goal_handle = future.result()
         if not goal_handle.accepted:
-            self.get_logger().error('Nav2 goal rejected!')
+            # 目标被拒绝
+            self.get_logger().error('Nav2 目标被拒绝！')
             self.nav2_goal_handle = None
             return
         
-        self.get_logger().info('Nav2 goal accepted')
+        # 目标被接受
+        self.get_logger().info('Nav2 目标已接受')
         self.nav2_goal_handle = goal_handle
         
-        # Get result callback
+        # 获取结果回调（用于异步获取导航结果）
         result_future = goal_handle.get_result_async()
         result_future.add_done_callback(self.nav2_result_callback)
     
     def nav2_result_callback(self, future):
-        """Callback for Nav2 goal result"""
+        """
+        Nav2 目标结果回调函数
+        
+        当 Nav2 导航完成（成功/失败/取消）时调用。
+        主要用于日志记录，实际状态检查在状态处理函数中进行。
+        
+        Args:
+            future: 包含目标句柄的 Future 对象
+        """
         from rclpy.action import GoalStatus
         goal_handle = future.result()
         if goal_handle.status == GoalStatus.STATUS_SUCCEEDED:
-            self.get_logger().info('Nav2 goal succeeded')
+            self.get_logger().info('Nav2 目标成功完成')
         elif goal_handle.status == GoalStatus.STATUS_ABORTED:
-            self.get_logger().warn('Nav2 goal aborted')
+            self.get_logger().warn('Nav2 目标被中止')
         elif goal_handle.status == GoalStatus.STATUS_CANCELED:
-            self.get_logger().info('Nav2 goal canceled')
-        # Status check is also done in state handlers for state transitions
+            self.get_logger().info('Nav2 目标被取消')
+        # 注意：状态检查也在状态处理函数中进行，用于状态转换
     
     def adjust_nav2_for_carry_mode(self, enable):
-        """Adjust Nav2 parameters for carry mode"""
-        # TODO: Implement Nav2 parameter adjustment
-        # This could be done via:
-        # 1. Dynamic reconfigure
-        # 2. Service calls to Nav2
-        # 3. Switching costmap parameters
+        """
+        调整 Nav2 参数以适应携带模式
+        
+        当机器人携带物体时，需要调整导航参数以提高安全性：
+        - 降低最大线速度和角速度
+        - 增大膨胀半径（inflation radius）
+        - 如果物体伸出底盘外，增大 footprint
+        
+        Args:
+            enable: bool，True 启用携带模式，False 恢复正常模式
+        """
+        # TODO: 实现 Nav2 参数调整
+        # 可以通过以下方式实现：
+        # 1. 动态重配置（Dynamic reconfigure）
+        # 2. Nav2 服务调用
+        # 3. 切换 costmap 参数文件
         if enable:
-            self.get_logger().info('Enabling carry mode: reduce speed, increase inflation')
-            # Pseudo code:
-            # nav2_params.max_vel_x = 0.3  # Reduced from default
-            # nav2_params.inflation_radius = 0.5  # Increased
+            self.get_logger().info('启用携带模式：降低速度，增大膨胀半径')
+            # 伪代码：
+            # nav2_params.max_vel_x = 0.3  # 从默认值降低
+            # nav2_params.inflation_radius = 0.5  # 增大
         else:
-            self.get_logger().info('Disabling carry mode: restore normal parameters')
-            # Pseudo code:
-            # nav2_params.max_vel_x = 0.5  # Restore default
-            # nav2_params.inflation_radius = 0.3  # Restore default
+            self.get_logger().info('禁用携带模式：恢复正常参数')
+            # 伪代码：
+            # nav2_params.max_vel_x = 0.5  # 恢复默认值
+            # nav2_params.inflation_radius = 0.3  # 恢复默认值
 
 
 def main(args=None):
+    """
+    主函数
+    
+    初始化 ROS2 节点并启动任务管理器状态机。
+    
+    Args:
+        args: 命令行参数（可选）
+    """
+    # 初始化 ROS2
     rclpy.init(args=args)
+    
+    # 创建任务管理器节点
     node = TaskManagerNode()
+    
     try:
+        # 运行节点（阻塞直到中断）
         rclpy.spin(node)
     except KeyboardInterrupt:
+        # 捕获键盘中断（Ctrl+C）
         pass
     finally:
+        # 清理资源
         node.destroy_node()
         rclpy.shutdown()
 
