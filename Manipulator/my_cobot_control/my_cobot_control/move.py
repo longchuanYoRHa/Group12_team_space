@@ -28,3 +28,4 @@ mc.send_coords(pick_point, move_speed, 1) # 1 is Linear move for accuracy
 time.sleep(3)
 
 print(coordinate)
+
