@@ -12,8 +12,8 @@ from launch_ros.substitutions import FindPackageShare
 
 
 def generate_launch_description():
-    # 检测雷达是否连接
-    # 检查常见的串口设备路径
+    # check if lidar is connected
+    # check common serial ports
     lidar_connected = False
     common_serial_ports = ['/dev/ttyUSB0', '/dev/ttyUSB1', '/dev/ttyACM0', '/dev/ttyACM1']
     
@@ -54,7 +54,7 @@ def generate_launch_description():
         cmd=['bash', '-c', 
              'until ros2 topic list | grep -q "/scan"; do echo "Waiting for /scan topic..."; sleep 1; done; echo "/scan topic is available"'],
         output='screen',
-        
+        condition=IfCondition(PythonExpression(["'", lidar_connected_config, "' == 'true'"]))
     )
 
     # 3. Static transform from base_link to laser (仅在雷达连接时执行)
