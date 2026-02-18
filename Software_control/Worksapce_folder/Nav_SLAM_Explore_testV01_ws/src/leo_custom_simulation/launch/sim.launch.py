@@ -9,11 +9,11 @@ from launch_ros.actions import Node
 def generate_launch_description():
     pkg_ros_gz_sim = get_package_share_directory("ros_gz_sim")
     pkg_custom = get_package_share_directory("leo_custom_simulation")
-    pkg_worlds = get_package_share_directory("leo_gz_worlds")
+    pkg_worlds = get_package_share_directory("leo_custom_simulation")
 
     sim_world = DeclareLaunchArgument(
         "sim_world",
-        default_value=os.path.join(pkg_worlds, "worlds", "leo_empty.sdf"),
+        default_value=os.path.join(pkg_worlds, "worlds", "world3.sdf"),
         description="Path to the Gazebo world file",
     )
 
