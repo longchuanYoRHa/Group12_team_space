@@ -52,7 +52,7 @@ def generate_launch_description():
         condition=IfCondition(PythonExpression(["'", lidar_connected_config, "' == 'true'"]))
     )
 
-    # Wait for scan topic - 不管是仿真还是实际都等待/scan
+    # Wait for scan topic 
     wait_for_scan_cmd = ExecuteProcess(
         cmd=['bash', '-c', 
              'timeout=60; elapsed=0; '
