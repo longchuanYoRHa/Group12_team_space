@@ -13,7 +13,7 @@
   <link name="g_base">
     <visual>
       <geometry>
-        <mesh filename="/home/tejas/mycobot/workspace/src/mycobot280_pi/urdf/meshes/G_base.dae"/>
+        <mesh filename="package://mycobot280_pi/urdf/meshes/G_base.dae"/>
       </geometry>
       <origin xyz="0 0 -0.03" rpy="0 0 1.5708"/>
     </visual>
@@ -34,7 +34,7 @@
   <link name="joint1">
     <visual>
       <geometry>
-        <mesh filename="/home/tejas/mycobot/workspace/src/mycobot280_pi/urdf/meshes/joint1.stl"/>
+        <mesh filename="package://mycobot280_pi/urdf/meshes/joint1.stl"/>
       </geometry>
       <origin xyz="0 0 0" rpy="1.5708 0 0"/>
     </visual>
@@ -55,7 +55,7 @@
   <link name="joint2">
     <visual>
       <geometry>
-        <mesh filename="/home/tejas/mycobot/workspace/src/mycobot280_pi/urdf/meshes/joint2.dae"/>
+        <mesh filename="package://mycobot280_pi/urdf/meshes/joint2.dae"/>
       </geometry>
       <origin xyz="0 0 -0.06096" rpy="0 0 -1.5708"/>
     </visual>
@@ -76,7 +76,7 @@
   <link name="joint3">
     <visual>
       <geometry>
-        <mesh filename="/home/tejas/mycobot/workspace/src/mycobot280_pi/urdf/meshes/joint3.dae"/>
+        <mesh filename="package://mycobot280_pi/urdf/meshes/joint3.dae"/>
       </geometry>
       <origin xyz="0 0 0.03256" rpy="0 -1.5708 0"/>
     </visual>
@@ -97,7 +97,7 @@
   <link name="joint4">
     <visual>
       <geometry>
-        <mesh filename="/home/tejas/mycobot/workspace/src/mycobot280_pi/urdf/meshes/joint4.dae"/>
+        <mesh filename="package://mycobot280_pi/urdf/meshes/joint4.dae"/>
       </geometry>
       <origin xyz="0 0 0.03056" rpy="0 -1.5708 0"/>
     </visual>
@@ -118,7 +118,7 @@
   <link name="joint5">
     <visual>
       <geometry>
-        <mesh filename="/home/tejas/mycobot/workspace/src/mycobot280_pi/urdf/meshes/joint5.stl"/>
+        <mesh filename="package://mycobot280_pi/urdf/meshes/joint5.stl"/>
       </geometry>
       <origin xyz="0 -0.001 -0.0345" rpy="0 -1.5708 3.1416"/>
     </visual>
@@ -139,7 +139,7 @@
   <link name="joint6">
     <visual>
       <geometry>
-        <mesh filename="/home/tejas/mycobot/workspace/src/mycobot280_pi/urdf/meshes/joint6.dae"/>
+        <mesh filename="package://mycobot280_pi/urdf/meshes/joint6.dae"/>
       </geometry>
       <origin xyz="0 0 -0.038" rpy="0 0 0"/>
     </visual>
@@ -160,7 +160,7 @@
   <link name="joint6_flange">
     <visual>
       <geometry>
-        <mesh filename="/home/tejas/mycobot/workspace/src/mycobot280_pi/urdf/meshes/joint7.dae"/>
+        <mesh filename="package://mycobot280_pi/urdf/meshes/joint7.dae"/>
       </geometry>
       <origin xyz="0 0 -0.012" rpy="0 0 0"/>
     </visual>
@@ -243,7 +243,7 @@
   <gazebo>
     <plugin name="gz_ros2_control::GazeboSimROS2ControlPlugin"
             filename="libgz_ros2_control-system.so">
-      <parameters>/home/tejas/mycobot/workspace/src/mycobot280_pi/config/mycobot_280_controllers.yaml</parameters>
+      <parameters>package://mycobot280_pi/config/mycobot_280_controllers.yaml</parameters>
     </plugin>
   </gazebo>
 

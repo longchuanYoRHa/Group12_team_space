@@ -11,6 +11,7 @@ find_package(ros_gz REQUIRED)
 
 install(DIRECTORY launch urdf worlds
   DESTINATION share/${PROJECT_NAME}/
+  FILES_MATCHING PATTERN "*"
 )
 
 install(PROGRAMS

@@ -4,6 +4,7 @@
 import os
 from launch import LaunchDescription
 from launch.actions import (
+    AppendEnvironmentVariable,
     DeclareLaunchArgument,
     IncludeLaunchDescription,
     RegisterEventHandler,
@@ -37,6 +38,15 @@ def generate_launch_description():
     # Files (computed at launch parse time)
     # -------------------------------------------------------------------------
     urdf_path = os.path.join(pkg_share, "urdf", "mycobot_280_gazebo.urdf")
+
+    # Set Gazebo resource path to allow resolving package:// URIs
+    # For Ignition Gazebo, GZ_SIM_RESOURCE_PATH should point to the directory
+    # containing the package name (e.g., .../share/ for package://mycobot280_pi/...)
+    package_parent_dir = os.path.dirname(pkg_share)
+    set_gz_resource_path = AppendEnvironmentVariable(
+        'GZ_SIM_RESOURCE_PATH',
+        package_parent_dir
+    )
 
     # Optional world: use package world if available, otherwise empty.sdf
     world_path = os.path.join(pkg_share, "worlds", "default.world")
@@ -168,6 +178,7 @@ def generate_launch_description():
     ld = LaunchDescription(
         [
             declare_use_sim_time,
+            set_gz_resource_path,
             bridge,
             info,
             rsp_node,

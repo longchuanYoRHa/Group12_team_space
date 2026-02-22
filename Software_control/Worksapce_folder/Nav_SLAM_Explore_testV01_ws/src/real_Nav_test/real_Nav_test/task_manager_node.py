@@ -16,6 +16,7 @@ from rclpy.node import Node
 from rclpy.action import ActionClient
 from rclpy.qos import qos_profile_sensor_data, ReliabilityPolicy
 import tf2_ros
+import tf2_geometry_msgs
 import geometry_msgs.msg as geometry_msgs
 import nav2_msgs.action as nav2_msgs
 import std_msgs.msg as std_msgs
@@ -126,6 +127,16 @@ class TaskManagerNode(Node):
             qos_profile_sensor_data
         )
         
+        # 订阅相机识别到的物体坐标 (obj_xy topic)
+        # 假设消息类型为 geometry_msgs.PointStamped (包含 x, y, z 坐标)
+        # 如果实际消息类型不同，请相应修改
+        self.obj_xy_sub = self.create_subscription(
+            geometry_msgs.PointStamped,
+            'obj_xy',
+            self.obj_xy_callback,
+            qos_profile_sensor_data
+        )
+        
         # TODO: 替换为实际的 bin_detector topic
         # 订阅回收箱检测器发布的回收箱位姿
         self.bin_pose_sub = self.create_subscription(
@@ -182,6 +193,69 @@ class TaskManagerNode(Node):
         else:
             # 不在正确状态，重置计数器
             self.object_detection_count = 0
+    
+    def obj_xy_callback(self, msg):
+        """
+        相机识别物体坐标回调函数
+        
+        当相机识别到物体并发布坐标到 obj_xy topic 时调用。
+        将坐标转换为 PoseStamped 格式并存储，供导航使用。
+        
+        Args:
+            msg: geometry_msgs.msg.PointStamped，物体坐标（可能在不同坐标系）
+        """
+        try:
+            # 将 PointStamped 转换为 PoseStamped
+            # 如果 obj_xy 发布的是相机坐标系，需要转换到 map 坐标系
+            if msg.header.frame_id != 'map':
+                # 需要坐标系转换：从相机坐标系转换到 map 坐标系
+                try:
+                    # 查找从 msg.header.frame_id 到 map 的变换
+                    transform = self.tf_buffer.lookup_transform(
+                        'map', 
+                        msg.header.frame_id, 
+                        rclpy.time.Time(),  # 使用最新变换
+                        timeout=rclpy.duration.Duration(seconds=0.5)
+                    )
+                    
+                    # 使用 tf2_geometry_msgs 正确转换点坐标
+                    point_stamped_in_map = tf2_geometry_msgs.do_transform_point(msg, transform)
+                    
+                    # 创建 PoseStamped（位置使用转换后的坐标，姿态使用默认值）
+                    pose_stamped = geometry_msgs.PoseStamped()
+                    pose_stamped.header.frame_id = 'map'
+                    pose_stamped.header.stamp = self.get_clock().now().to_msg()
+                    pose_stamped.pose.position = point_stamped_in_map.point
+                    # 默认姿态（无旋转）
+                    pose_stamped.pose.orientation.w = 1.0
+                    
+                    self.object_pose = pose_stamped
+                    self.get_logger().info(
+                        f'接收到物体坐标 ({msg.header.frame_id}坐标系): ({msg.point.x:.2f}, {msg.point.y:.2f}, {msg.point.z:.2f}), '
+                        f'已转换到 map 坐标系: ({pose_stamped.pose.position.x:.2f}, {pose_stamped.pose.position.y:.2f}, {pose_stamped.pose.position.z:.2f})'
+                    )
+                except Exception as e:
+                    self.get_logger().warn(f'坐标系转换失败: {e}，使用原始坐标（假设已经是 map 坐标系）')
+                    # 转换失败，使用原始坐标（假设已经是 map 坐标系）
+                    pose_stamped = geometry_msgs.PoseStamped()
+                    pose_stamped.header.frame_id = 'map'
+                    pose_stamped.header.stamp = self.get_clock().now().to_msg()
+                    pose_stamped.pose.position = msg.point
+                    pose_stamped.pose.orientation.w = 1.0
+                    self.object_pose = pose_stamped
+            else:
+                # 已经是 map 坐标系，直接使用
+                pose_stamped = geometry_msgs.PoseStamped()
+                pose_stamped.header.frame_id = 'map'
+                pose_stamped.header.stamp = self.get_clock().now().to_msg()
+                pose_stamped.pose.position = msg.point
+                pose_stamped.pose.orientation.w = 1.0
+                self.object_pose = pose_stamped
+                self.get_logger().info(
+                    f'接收到物体坐标 (map坐标系): ({msg.point.x:.2f}, {msg.point.y:.2f}, {msg.point.z:.2f})'
+                )
+        except Exception as e:
+            self.get_logger().error(f'处理 obj_xy 消息时出错: {e}')
     
     def bin_pose_callback(self, msg):
         """
@@ -331,10 +405,20 @@ class TaskManagerNode(Node):
         """
         处理物体发现状态
         
-        当物体被稳定检测到时，立即进入暂停探索状态。
+        当物体被稳定检测到时，检查是否已从 obj_xy topic 接收到坐标。
+        如果坐标已接收，立即进入暂停探索状态；否则等待坐标接收。
         """
-        self.get_logger().info('物体发现，转换到暂停探索状态')
-        self.current_state = TaskState.PAUSE_EXPLORE
+        # 检查是否已从 obj_xy topic 接收到物体坐标
+        if self.object_pose is not None:
+            self.get_logger().info(
+                f'物体发现，坐标已接收: ({self.object_pose.pose.position.x:.2f}, '
+                f'{self.object_pose.pose.position.y:.2f}, {self.object_pose.pose.position.z:.2f})，'
+                '转换到暂停探索状态'
+            )
+            self.current_state = TaskState.PAUSE_EXPLORE
+        else:
+            # 坐标尚未接收，等待（状态机会继续调用此函数直到坐标接收）
+            self.get_logger().debug('物体发现，等待 obj_xy topic 坐标...')
     
     def handle_pause_explore_state(self):
         """

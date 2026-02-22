@@ -52,7 +52,7 @@ def generate_launch_description():
         condition=IfCondition(PythonExpression(["'", lidar_connected_config, "' == 'true'"]))
     )
 
-    # Wait for scan topic - 不管是仿真还是实际都等待/scan
+    # Wait for scan topic 
     wait_for_scan_cmd = ExecuteProcess(
         cmd=['bash', '-c', 
              'timeout=60; elapsed=0; '
@@ -74,7 +74,7 @@ def generate_launch_description():
         name='static_tf_base_to_laser',
         arguments=[
             '0.2407', '0.0', '-0.06918',  # x, y, z in meters
-            '3.14159', '0', '0',  # roll, pitch, yaw in radians
+            '3.14159', '0', '3.14159',  # roll, pitch, yaw in radians
             'base_link', 'laser'
         ],
         output='screen',
