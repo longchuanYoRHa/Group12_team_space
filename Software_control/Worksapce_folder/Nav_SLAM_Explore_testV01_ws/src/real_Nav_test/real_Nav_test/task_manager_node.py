@@ -210,11 +210,15 @@ class TaskManagerNode(Node):
             if msg.header.frame_id != 'map':
                 # 需要坐标系转换：从相机坐标系转换到 map 坐标系
                 try:
+                    # 将消息时间戳转换为 rclpy.time.Time
+                    msg_time = rclpy.time.Time.from_msg(msg.header.stamp)
+                    
                     # 查找从 msg.header.frame_id 到 map 的变换
+                    # 使用消息时间戳以确保时间同步
                     transform = self.tf_buffer.lookup_transform(
                         'map', 
                         msg.header.frame_id, 
-                        rclpy.time.Time(),  # 使用最新变换
+                        msg_time,  # 使用消息时间戳
                         timeout=rclpy.duration.Duration(seconds=0.5)
                     )
                     
