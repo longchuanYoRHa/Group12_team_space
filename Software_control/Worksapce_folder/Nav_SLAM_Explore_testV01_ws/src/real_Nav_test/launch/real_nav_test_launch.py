@@ -37,11 +37,11 @@ def generate_launch_description():
     # Launch arguments
     use_sim_time = LaunchConfiguration('use_sim_time', default='false')
     
-    # 创建条件变量（使用字符串 'true'/'false' 以便在条件中使用）
+    # create condition variable (use string 'true'/'false' to use in condition)
     lidar_connected_str = 'true' if lidar_connected else 'false'
     lidar_connected_config = LaunchConfiguration('lidar_connected', default=lidar_connected_str)
 
-    # 1. Launch RPLidar (without rviz) - 仅在雷达连接时启动
+    # 1. Launch RPLidar (without rviz) - only start when lidar is connected
     rplidar_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             PathJoinSubstitution([rplidar_pkg_dir, 'launch', 'rplidar_a2m12_launch.py'])
@@ -57,7 +57,7 @@ def generate_launch_description():
         condition=IfCondition(PythonExpression(["'", lidar_connected_config, "' == 'true'"]))
     )
 
-    # 3. Static transform from base_link to laser (仅在雷达连接时执行)
+    # 3. Static transform from base_link to laser (only execute when lidar is connected)
     # Lidar position: X+ 240.7mm (0.2407m), Z- 69.18mm (-0.06918m), upside down (180 deg rotation around X axis)
     # For upside down: roll=π (3.14159 radians), pitch=0, yaw=0
     static_tf_base_to_laser = Node(
@@ -104,7 +104,7 @@ def generate_launch_description():
         launch_arguments={
             'use_sim_time': use_sim_time,
             'params_file': nav2_params_file,
-            # 如果你用 namespace，也可以一起传：
+            # if you use namespace, you can also pass it together:
             # 'namespace': LaunchConfiguration('namespace'),
             # 'autostart': 'True',
         }.items()
@@ -160,13 +160,13 @@ def generate_launch_description():
     # 6. Activate SLAM (after configure)
     # 7. Launch explore (after SLAM is activated)
 
-    # Wait for scan after lidar starts (with delay) - 仅在雷达连接时执行
+    # Wait for scan after lidar starts (with delay) - only execute when lidar is connected
     wait_for_scan_delayed = TimerAction(
         period=3.0,  # Give lidar time to start
         actions=[wait_for_scan_cmd],
     )
 
-    # Publish static transform after scan is available - 仅在雷达连接时执行
+    # Publish static transform after scan is available - only execute when lidar is connected
     static_tf_delayed = TimerAction(
         period=5.0,  # Wait a bit more to ensure scan is publishing
         actions=[static_tf_base_to_laser],
@@ -223,17 +223,17 @@ def generate_launch_description():
             description='Whether lidar is connected (auto-detected)'
         ),
         
-        # 显示检测结果日志
+        # log the detection result
         LogInfo(
-            msg=['雷达连接状态: 已连接，将启动雷达节点'],
+            msg=['lidar: connected, will start lidar node'],
             condition=IfCondition(PythonExpression(["'", lidar_connected_config, "' == 'true'"]))
         ),
         LogInfo(
-            msg='雷达未连接，跳过雷达启动（适配仿真模式）',
+            msg='lidar: not connected, skip lidar launch (adapt to simulation mode)',
             condition=UnlessCondition(PythonExpression(["'", lidar_connected_config, "' == 'true'"]))
         ),
         
-        # Start lidar first (仅在雷达连接时)
+        # Start lidar first (only execute when lidar is connected)
         rplidar_launch,
         
         # Wait for scan topic

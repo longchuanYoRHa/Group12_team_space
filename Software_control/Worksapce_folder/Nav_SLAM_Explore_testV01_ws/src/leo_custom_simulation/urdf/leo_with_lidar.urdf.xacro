@@ -1,35 +1,44 @@
 <?xml version="1.0"?>
 <robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="leo_sim_with_lidar">
 
-  <!-- 1) 直接 include 官方仿真 xacro（不修改官方文件） -->
+  <!-- 1) directly include the official simulation xacro (without modifying the official file) -->
   <xacro:include filename="$(find leo_description)/urdf/leo_sim.urdf.xacro"/>
 
 
-  <!-- 2) 生成官方本体
-       注意：如果官方 leo_sim.urdf.xacro 里面本身就是完整 robot，而不是宏，
-       那么 include 后它已经生成了内容，你就不需要再调用宏。-->
+  <!-- 2) generate the official body
+       Note: if the official leo_sim.urdf.xacro itself is a complete robot, not a macro,
+       then after include, it has already generated the content, you don't need to call the macro. -->
 
-  <!-- 3) 追加一个雷达 link（名字用 laser，与你 TF/SLAM 习惯一致） -->
+  <!-- 3) add a laser link (name use laser, consistent with your TF/SLAM习惯) -->
   <link name="laser">
     <inertial>
       <mass value="0.15"/>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <inertia ixx="1e-4" ixy="0" ixz="0" iyy="1e-4" iyz="0" izz="1e-4"/>
     </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <cylinder length="0.05" radius="0.01"/>
+      </geometry>
+      <material name="laser_material">
+        <color rgba="1 0 0 1"/>
+      </material>
+    </visual>
   </link>
 
-  <!-- 4) 固定连接到 base_link（位姿用你之前那组） -->
+  <!-- 4) fixed connection to base_link (pose use the previous one) -->
   <joint name="base_to_laser" type="fixed">
     <parent link="base_link"/>
     <child link="laser"/>
-    <origin xyz="0.2407 0.0 -0.06918" rpy="0 0 0"/>
+    <origin xyz="0.1758 0.0 -0.10553" rpy="0 0 0"/>
   </joint>
 
-  <!-- D435i 相机配置（简化版：仅颜色和深度，无IMU） -->
+  <!-- D435i camera configuration (simplified version: only color and depth, no IMU) -->
   <xacro:property name="M_PI" value="3.1415926535897931"/>
   <xacro:property name="deg_to_rad" value="0.01745329251994329577"/>
   
-  <!-- 相机参数（与原配置保持一致） -->
+  <!-- camera parameters (consistent with the original configuration) -->
   <xacro:property name="color_width" value="1920"/>
   <xacro:property name="color_height" value="1080"/>
   <xacro:property name="color_fps" value="30"/>
@@ -40,7 +49,7 @@
   <xacro:property name="depth_fps" value="30"/>
   <xacro:property name="depth_fov" value="85.2"/>
   
-  <!-- 相机本体 link -->
+  <!-- camera body link -->
   <link name="D435i_camera_link">
     <inertial>
       <mass value="0.564"/>
@@ -64,14 +73,14 @@
     </collision>
   </link>
   
-  <!-- 相机安装到 base_link -->
+  <!-- camera installed to base_link -->
   <joint name="base_to_D435i_camera" type="fixed">
     <parent link="base_link"/>
     <child link="D435i_camera_link"/>
-    <origin xyz="0.0 0.5 0.1" rpy="0.0 0.0 0.0"/>
+    <origin xyz="0.14813 -0.027 0.05957" rpy="0.0 0.0 0.0"/>
   </joint>
   
-  <!-- 深度相机 frame -->
+  <!-- depth camera frame -->
   <joint name="D435i_camera_depth_joint" type="fixed">
     <origin xyz="0 0 0" rpy="0 0 0"/>
     <parent link="D435i_camera_link"/>
@@ -86,7 +95,7 @@
   </joint>
   <link name="D435i_camera_depth_optical_frame"/>
   
-  <!-- 颜色相机 frame -->
+  <!-- color camera frame -->
   <joint name="D435i_camera_color_joint" type="fixed">
     <origin xyz="0 0.015 0" rpy="0 0 0"/>
     <parent link="D435i_camera_depth_frame"/>
@@ -101,7 +110,7 @@
   </joint>
   <link name="D435i_camera_color_optical_frame"/>
   
-  <!-- Gazebo 颜色相机传感器 -->
+  <!-- Gazebo color camera sensor -->
   <gazebo reference="D435i_camera_link">
     <sensor name="D435i_camera_color" type="camera">
       <camera>
@@ -129,7 +138,7 @@
     </sensor>
   </gazebo>
   
-  <!-- Gazebo 深度相机传感器 -->
+  <!-- Gazebo depth camera sensor -->
   <gazebo reference="D435i_camera_link">
     <sensor name="D435i_camera_depth" type="depth_camera">
       <camera>
@@ -156,15 +165,36 @@
     </sensor>
   </gazebo>
 
-  <!-- 5) gz-sim 的 Lidar 传感器：URDF Gazebo 扩展写在 <gazebo> 里
-       topic 建议用 scan，最终桥成 ROS 的 /scan 或 <ns>/scan -->
+  <gazebo reference="D435i_camera_link">
+    <sensor name="boundingbox_camera" type="boundingbox_camera">
+         <topic>boxes</topic>
+         <camera>
+           <box_type>2d</box_type>
+           <horizontal_fov>1.047</horizontal_fov>
+           <image>
+             <width>800</width>
+             <height>600</height>
+           </image>
+           <clip>
+             <near>0.1</near>
+             <far>10</far>
+           </clip>
+         </camera>
+         <always_on>1</always_on>
+         <update_rate>30</update_rate>
+         <visualize>true</visualize>
+       </sensor>
+  </gazebo>
+
+  <!-- 5) gz-sim's Lidar sensor: URDF Gazebo extension written in <gazebo>
+       topic suggest use scan, finally bridge to ROS's /scan or <ns>/scan -->
   <gazebo reference="laser">
     <sensor name="lidar" type="gpu_lidar">
       <always_on>true</always_on>
       <update_rate>10</update_rate>
       <visualize>true</visualize>
 
-      <!-- gz transport topic（后面用 ros_gz_bridge 桥接） -->
+      <!-- gz transport topic (use ros_gz_bridge to bridge) -->
       <topic>scan</topic>
 
       <ray>
@@ -181,7 +211,7 @@
         </range>
       </ray>
 
-      <!-- 很关键：让桥接后的 LaserScan header.frame_id = laser -->
+      <!-- very important: make the LaserScan header.frame_id = laser after bridging -->
       <gz_frame_id>laser</gz_frame_id>
     </sensor>
   </gazebo>
