@@ -200,8 +200,8 @@ local_costmap:
       plugins: ["voxel_layer", "inflation_layer"]
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 3.0 #how much the costmap is scaled by(dair to approach the obstacle)
-        inflation_radius: 0.15 #radius of the inflation layer (how much the costmap is inflated)
+        cost_scaling_factor: 2.0 #how much the costmap is scaled by(dair to approach the obstacle)
+        inflation_radius: 0.05 #radius of the inflation layer (how much the costmap is inflated)
       voxel_layer:
         plugin: "nav2_costmap_2d::VoxelLayer"
         enabled: True
@@ -257,8 +257,8 @@ global_costmap:
         map_subscribe_transient_local: True
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 3.0 
-        inflation_radius: 0.7 #radius of the inflation layer (how much the costmap is inflated)
+        cost_scaling_factor: 3.5 
+        inflation_radius: 0.05 #radius of the inflation layer (how much the costmap is inflated)
       always_send_full_costmap: True
 
 # The yaml_filename does not need to be specified since it going to be set by defaults in launch.
@@ -318,8 +318,8 @@ behavior_server:
     robot_base_frame: base_link
     transform_tolerance: 0.1
     simulate_ahead_time: 2.0
-    max_rotational_vel: 1.0
-    min_rotational_vel: 0.4
+    max_rotational_vel: 0.175
+    min_rotational_vel: 0.08
     rotational_acc_lim: 3.2
 
 waypoint_follower:
@@ -361,8 +361,8 @@ velocity_smoother:
     smoothing_frequency: 20.0
     scale_velocities: False
     feedback: "OPEN_LOOP"
-    max_velocity: [0.35, 0.0, 1.0] #max velocity of the robot (x, y, z)
-    min_velocity: [-0.35, 0.0, -1.0] #min velocity of the robot (x, y, z)
+    max_velocity: [0.2, 0.0, 0.17] #max velocity of the robot (x, y, z)
+    min_velocity: [-0.2, 0.0, -0.17] #min velocity of the robot (x, y, z)
     max_accel: [2.5, 0.0, 3.2]
     max_decel: [-2.5, 0.0, -3.2]
     odom_topic: "odom"

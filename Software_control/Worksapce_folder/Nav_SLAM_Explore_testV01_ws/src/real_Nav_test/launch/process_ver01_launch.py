@@ -417,14 +417,14 @@ def generate_launch_description():
         
         # 3-11. start subsequent nodes through event handler chain
         wait_for_scan_handler,      # after /scan available, start static_tf and laser_filter
-        #slam_start_handler,          # after /scan available, delay start SLAM
-        #slam_node_handler,           # after /scan available, delay wait for SLAM node
-        #wait_for_slam_node_handler,  # after SLAM node available, configure SLAM
-        #configure_slam_handler,      # after configuring, wait for configuration to complete
-        #wait_for_slam_configured_handler,  # after configuring, activate SLAM
-        #activate_slam_handler,       # after activating, wait for /map
-        #wait_for_map_handler,        # after /map available, start Nav2
-        #nav2_handler,                # after /map available, delay wait for navigate_to_pose action
-        #wait_for_nav_action_handler, # after action available, start explore
-        #explore_handler,              # after action available, delay start task manager and rviz
+        slam_start_handler,          # after /scan available, delay start SLAM
+        slam_node_handler,           # after /scan available, delay wait for SLAM node
+        wait_for_slam_node_handler,  # after SLAM node available, configure SLAM
+        configure_slam_handler,      # after configuring, wait for configuration to complete
+        wait_for_slam_configured_handler,  # after configuring, activate SLAM
+        activate_slam_handler,       # after activating, wait for /map
+        wait_for_map_handler,        # after /map available, start Nav2
+        nav2_handler,                # after /map available, delay wait for navigate_to_pose action
+        wait_for_nav_action_handler, # after navigate_to_pose action available, start explore
+        # explore_handler,              # after action available, delay start task manager and rviz
     ])
