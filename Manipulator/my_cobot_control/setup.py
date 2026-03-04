@@ -6,10 +6,19 @@ from glob import glob
 package_name = 'my_cobot_control'
 
 ########################
-# Python using a virtual environment (delete this paragraph on real robot)
-# 获取虚拟环境路径 （机械臂上删除此段）
+# Use venv Python only on dev machine (auto-detect by path existence).
+# On the real robot Pi, pymycobot is installed system-wide so no venv needed.
 venv_python = '/home/student42/mycobot_ws/venv_mycobot/bin/python3'
+use_venv = os.path.exists(venv_python)
 ########################
+
+_extra_options = {}
+if use_venv:
+    _extra_options['options'] = {
+        'build_scripts': {
+            'executable': venv_python,
+        },
+    }
 
 setup(
     name=package_name,
@@ -25,7 +34,7 @@ setup(
     zip_safe=True,
     maintainer='student42',
     maintainer_email='zhikun.peng929@outlook.com',
-    description='TODO: Package description',
+    description='MyCobot 280 Pi ROS2 arm controller with adaptive gripper',
     license='TODO: License declaration',
     extras_require={
         'test': [
@@ -39,15 +48,8 @@ setup(
             'move = my_cobot_control.move:main',
             'pick_and_place_rviz = my_cobot_control.pick_and_place_rviz:main',
             'pick_and_place_with_feedback = my_cobot_control.pick_and_place_with_feedback:main',
+            'mycobot_controller = my_cobot_control.mycobot_controller:main',
         ],
     },
-    ##################################################
-    # Python using a virtual environment (delete this paragraph on real robot)
-    # 使用虚拟环境的 Python （机械臂上删除此段）
-    options={
-        'build_scripts': {
-            'executable': venv_python,
-        },
-    },
-    ##################################################
+    **_extra_options,
 )
