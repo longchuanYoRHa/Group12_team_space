@@ -50,10 +50,8 @@ def spawn_robot(context: LaunchContext, namespace: LaunchConfiguration):
             robot_ns + "/camera/camera_info@sensor_msgs/msg/CameraInfo[gz.msgs.CameraInfo",
             robot_ns + "/joint_states@sensor_msgs/msg/JointState[gz.msgs.Model",
 
-            # ✅ 新增：LaserScan bridge
-            # 你的 gz topic 在 xacro 写的是 "scan"
-            # 在有 namespace 时最终希望是 "<ns>/scan"
             robot_ns + "/scan@sensor_msgs/msg/LaserScan[gz.msgs.LaserScan",
+            robot_ns + "/boxes@sensor_msgs/msg/BoundingBoxes[gz.msgs.BoundingBoxes",
         ],
         parameters=[{"qos_overrides./tf_static.publisher.durability": "transient_local"}],
         output="screen",

@@ -27,10 +27,10 @@ slam_toolbox:
     debug_logging: false
     throttle_scans: 1
     transform_publish_period: 0.02 #if 0 never publishes odometry
-    map_update_interval: 5.0
+    map_update_interval: 1.0
     resolution: 0.05
     max_laser_range: 20.0 #for rastering images
-    minimum_time_interval: 0.5
+    minimum_time_interval: 0.1  
     transform_timeout: 0.2
     tf_buffer_duration: 30.0
     stack_size_to_use: 40000000 #// program needs a larger stack size to serialize large maps
@@ -39,8 +39,8 @@ slam_toolbox:
     # General Parameters
     use_scan_matching: true
     use_scan_barycenter: true
-    minimum_travel_distance: 0.15 #how far the robot must travel to be considered a new travel distance
-    minimum_travel_heading: 0.15 #how much the robot must turn to be considered a new travel heading
+    minimum_travel_distance: 0.05 #how far the robot must travel to be considered a new travel distance
+    minimum_travel_heading: 0.05 #how much the robot must turn to be considered a new travel heading
     scan_buffer_size: 10
     scan_buffer_maximum_scan_distance: 10.0
     link_match_minimum_response_fine: 0.1  
@@ -63,8 +63,8 @@ slam_toolbox:
     loop_search_space_smear_deviation: 0.03
 
     # Scan Matcher Parameters
-    distance_variance_penalty: 0.2  #how much the variance of the distance affects the scan matcher score (lower to trust lidar more)
-    angle_variance_penalty: 0.5  #how much the variance of the angle affects the scan matcher score
+    distance_variance_penalty: 0.05  #how much the variance of the distance affects the scan matcher score (lower to trust lidar more)
+    angle_variance_penalty: 0.3  #how much the variance of the angle affects the scan matcher score
 
     fine_search_angle_offset: 0.00349     
     coarse_search_angle_offset: 0.349   

@@ -73,9 +73,22 @@ def generate_launch_description():
         executable='static_transform_publisher',
         name='static_tf_base_to_laser',
         arguments=[
-            '0.2407', '0.0', '-0.06918',  # x, y, z in meters
+            '0.1758', '0.0', '-0.10553',  # x, y, z in meters
             '3.14159', '0', '3.14159',  # roll, pitch, yaw in radians
             'base_link', 'laser'
+        ],
+        output='screen',
+        condition=IfCondition(PythonExpression(["'", lidar_connected_config, "' == 'true'"]))
+    )
+
+    static_tf_base_to_camera = Node(
+        package='tf2_ros',
+        executable='static_transform_publisher',
+        name='static_tf_base_to_camera',
+        arguments=[
+            '0.14813', '0.05957', '0.027',  # x, y, z in meters
+            '0.0', '0.0', '0.0',  # roll, pitch, yaw in radians
+            'base_link', 'depth_camera'
         ],
         output='screen',
         condition=IfCondition(PythonExpression(["'", lidar_connected_config, "' == 'true'"]))
@@ -226,12 +239,10 @@ def generate_launch_description():
         }.items()
     )
 
-    # 使用事件处理器来创建严格的依赖关系链
-    # 对于Node和IncludeLaunchDescription，使用TimerAction包装（短延迟）以便在等待命令完成后启动
     
-    # 1. 等待/scan topic可用后，启动static transform和laser filter
+    # 1. Wait for /scan topic available, then start static transform and laser filter
     static_tf_after_scan = TimerAction(
-        period=0.1,  # 短暂延迟，确保等待命令完成
+        period=0.1,  # short delay, ensure the wait command completes
         actions=[static_tf_base_to_laser]
     )
     
@@ -250,9 +261,9 @@ def generate_launch_description():
         )
     )
 
-    # 2. 在/scan可用后，延迟启动SLAM（给transform和filter时间建立）
+    # 2. After /scan available, delay start SLAM (give transform and filter time to establish)
     slam_after_scan = TimerAction(
-        period=2.0,  # 给transform和filter时间建立
+        period=2.0,  # give transform and filter time to establish
         actions=[slam_toolbox_node]
     )
     
@@ -263,21 +274,21 @@ def generate_launch_description():
         )
     )
 
-    # 3. SLAM节点启动后，等待节点可用，然后配置
-    # SLAM在/scan可用后2秒启动，所以等待节点应该在/scan可用后5秒（2秒启动+3秒等待）
+    # 3. After SLAM node starts, wait for node available, then configure
+    # SLAM starts after 2 seconds when /scan is available, so the waiting node should be after 5 seconds (2 seconds start + 3 seconds wait)
     wait_slam_node_after_start = TimerAction(
-        period=5.0,  # 在/scan可用后5秒等待SLAM节点（2秒启动+3秒等待）
+        period=5.0,  # wait for SLAM node after 5 seconds (2 seconds start + 3 seconds wait)
         actions=[wait_for_slam_node_cmd]
     )
     
     slam_node_handler = RegisterEventHandler(
         OnProcessExit(
-            target_action=wait_for_scan_cmd,  # 在scan可用后，延迟等待SLAM节点
+            target_action=wait_for_scan_cmd,  # after scan available, delay wait for SLAM node
             on_exit=[wait_slam_node_after_start]
         )
     )
 
-    # 4. SLAM节点可用后，配置SLAM
+    # 4. After SLAM node available, configure SLAM
     wait_for_slam_node_handler = RegisterEventHandler(
         OnProcessExit(
             target_action=wait_for_slam_node_cmd,
@@ -285,7 +296,7 @@ def generate_launch_description():
         )
     )
 
-    # 5. 配置SLAM后，等待配置完成，然后激活
+    # 5. After configuring SLAM, wait for configuration to complete, then activate
     configure_slam_handler = RegisterEventHandler(
         OnProcessExit(
             target_action=configure_slam_cmd,
@@ -293,7 +304,7 @@ def generate_launch_description():
         )
     )
 
-    # 6. SLAM配置完成后，激活SLAM
+    # 6. After configuring SLAM, activate SLAM
     wait_for_slam_configured_handler = RegisterEventHandler(
         OnProcessExit(
             target_action=wait_for_slam_configured_cmd,
@@ -301,7 +312,7 @@ def generate_launch_description():
         )
     )
 
-    # 7. SLAM激活后，等待/map topic可用，然后启动Nav2
+    # 7. After SLAM activated, wait for /map topic available, then start Nav2
     activate_slam_handler = RegisterEventHandler(
         OnProcessExit(
             target_action=activate_slam_cmd,
@@ -309,9 +320,9 @@ def generate_launch_description():
         )
     )
 
-    # 8. /map topic可用后，启动Nav2
+    # 8. After /map topic available, start Nav2
     nav2_after_map = TimerAction(
-        period=0.1,  # 短暂延迟
+        period=0.1,  # short delay
         actions=[nav2_launch]
     )
     
@@ -322,24 +333,24 @@ def generate_launch_description():
         )
     )
 
-    # 9. Nav2启动后，等待navigate_to_pose action可用，然后启动explore
-    # 注意：nav2_launch是IncludeLaunchDescription，不会触发OnProcessExit
-    # 所以在/map可用后，延迟等待action server
+    # 9. After Nav2 starts, wait for navigate_to_pose action available, then start explore
+    # Note: nav2_launch is IncludeLaunchDescription, will not trigger OnProcessExit
+    # So after /map available, delay wait for action server
     wait_nav_action_after_map = TimerAction(
-        period=8.0,  # 给Nav2时间启动（在/map可用后8秒）
+        period=8.0,  # give Nav2 time to start (after /map available in 8 seconds)
         actions=[wait_for_nav_action_cmd]
     )
     
     nav2_handler = RegisterEventHandler(
         OnProcessExit(
-            target_action=wait_for_map_cmd,  # 在map可用后，延迟等待action
+            target_action=wait_for_map_cmd,  # after map available, delay wait for action
             on_exit=[wait_nav_action_after_map]
         )
     )
 
-    # 10. navigate_to_pose action可用后，启动explore
+    # 10. After navigate_to_pose action available, start explore
     explore_after_nav_action = TimerAction(
-        period=0.1,  # 短暂延迟
+        period=0.1,  # short delay
         actions=[explore_launch]
     )
     
@@ -350,11 +361,11 @@ def generate_launch_description():
         )
     )
 
-    # 11. Explore启动后，启动task manager和rviz
-    # 注意：explore_launch是IncludeLaunchDescription，不会触发OnProcessExit
-    # 所以在navigate_to_pose可用后，延迟启动task manager和rviz
+    # 11. After explore starts, start task manager and rviz
+    # Note: explore_launch is IncludeLaunchDescription, will not trigger OnProcessExit
+    # So after navigate_to_pose available, delay start task manager and rviz
     task_manager_after_nav_action = TimerAction(
-        period=3.0,  # 给explore时间启动
+        period=3.0,  # give explore time to start
         actions=[task_manager_node]
     )
     
@@ -365,7 +376,7 @@ def generate_launch_description():
     
     explore_handler = RegisterEventHandler(
         OnProcessExit(
-            target_action=wait_for_nav_action_cmd,  # 在nav action可用后，延迟启动task manager和rviz
+            target_action=wait_for_nav_action_cmd,  # after nav action available, delay start task manager and rviz
             on_exit=[
                 task_manager_after_nav_action,
                 rviz_after_nav_action,
@@ -397,23 +408,23 @@ def generate_launch_description():
             condition=UnlessCondition(PythonExpression(["'", lidar_connected_config, "' == 'true'"]))
         ),
         
-        # 启动顺序严格按照topic依赖关系：
-        # 1. 启动雷达（如果连接）
+        # start in strict topic dependency order:
+        # 1. start lidar (if connected)
         rplidar_launch,
         
-        # 2. 等待/scan topic可用（不管是仿真还是实际）
+        # 2. wait for /scan topic available (both simulation and actual)
         wait_for_scan_cmd,
         
-        # 3-11. 通过事件处理器链式启动后续节点
-        wait_for_scan_handler,      # /scan可用后，启动static_tf和laser_filter
-        slam_start_handler,          # /scan可用后，延迟启动SLAM
-        slam_node_handler,           # /scan可用后，延迟等待SLAM节点
-        wait_for_slam_node_handler,  # SLAM节点可用后，配置SLAM
-        configure_slam_handler,      # 配置后，等待配置完成
-        wait_for_slam_configured_handler,  # 配置完成后，激活SLAM
-        activate_slam_handler,       # 激活后，等待/map
-        wait_for_map_handler,        # /map可用后，启动Nav2
-        nav2_handler,                # /map可用后，延迟等待navigate_to_pose action
-        wait_for_nav_action_handler, # action可用后，启动explore
-        #explore_handler,              # action可用后，延迟启动task_manager和rviz
+        # 3-11. start subsequent nodes through event handler chain
+        wait_for_scan_handler,      # after /scan available, start static_tf and laser_filter
+        slam_start_handler,          # after /scan available, delay start SLAM
+        slam_node_handler,           # after /scan available, delay wait for SLAM node
+        wait_for_slam_node_handler,  # after SLAM node available, configure SLAM
+        configure_slam_handler,      # after configuring, wait for configuration to complete
+        wait_for_slam_configured_handler,  # after configuring, activate SLAM
+        activate_slam_handler,       # after activating, wait for /map
+        wait_for_map_handler,        # after /map available, start Nav2
+        nav2_handler,                # after /map available, delay wait for navigate_to_pose action
+        wait_for_nav_action_handler, # after navigate_to_pose action available, start explore
+        # explore_handler,              # after action available, delay start task manager and rviz
     ])

@@ -38,6 +38,7 @@ setup(
     entry_points={
         'console_scripts': [
             'task_manager_node = real_Nav_test.task_manager_node:main',
+            'approach_from_boxes_test_node = real_Nav_test.approach_from_boxes_test_node:main',
         ],
     },
 )
