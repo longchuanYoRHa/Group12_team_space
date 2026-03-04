@@ -60,11 +60,9 @@ else:
 
 **How to use:**
 ```bash
-# Activate virtual environment
-source /home/student42/mycobot_ws/venv_mycobot/bin/activate
 
 # Navigate to directory
-cd /home/student42/mycobot_ws/src/my_cobot_control/my_cobot_control
+cd ~/ros2_ws/src/my_cobot_control/my_cobot_control
 
 # Run the test
 python3 test_gripper_threshold.py

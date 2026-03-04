@@ -50,7 +50,7 @@ cd ~/mycobot_ws/src
 
 ```bash
 # Clone this package
-git clone https://github.com/YOUR_USERNAME/my_cobot_control.git
+git clone https://github.com/DissimilarTriangle/MyCobot280Pi_ROS2_Package
 
 # Clone the official mycobot_ros2 package (provides URDF model)
 # The official repository only supports Humble, but you can try to use it in Jazzy as well.
@@ -60,7 +60,7 @@ git clone -b humble https://github.com/elephantrobotics/mycobot_ros2.git
 # Source: https://github.com/mltejas88/Project_Mycobot_280pi_simulation
 ```
 
-### 3. Build Workspace and Virtual Environment
+### 3. Build Workspace and Virtual Environment on 
 
 ```bash
 cd ~/mycobot_ws
@@ -193,27 +193,19 @@ NUC                                           Pi (arm)
  │◄── sub /arm/status == "idle" ───────────────│  Done, ready for next block
 ```
 
-## 3.2 Build
-
-```bash
-cd ~/mycobot_ws
-colcon build --packages-select my_cobot_control
-source install/setup.bash
-```
-
-## 3.3 Run on Pi (Real Hardware)
+## 3.2 Run on Pi (Real Hardware)
 
 ### Deploy to Pi
 ```bash
 # From NUC, copy the source to Pi
-scp -r ~/mycobot_ws/src/my_cobot_control elephant@10.3.14.59:~/mycobot_ws/src/
+scp -r ~/mycobot_ws/src/my_cobot_control elephant@10.3.14.59:~/ros2_ws/src/
 
 # SSH into Pi
 ssh elephant@10.3.14.59
 # password: trunk
 
 # Build on Pi
-cd ~/mycobot_ws
+cd ~/ros2_ws
 colcon build --packages-select my_cobot_control
 source install/setup.bash
 ```
@@ -235,7 +227,7 @@ ros2 launch my_cobot_control arm_controller.launch.py rviz:=true
 ros2 run my_cobot_control mycobot_controller --ros-args -r __ns:=/arm
 ```
 
-## 3.4 Run on NUC (Mock Mode / Development)
+## 3.3 Run on NUC (Mock Mode / Development)
 
 When no hardware is connected (no `/dev/ttyAMA0`), the controller automatically enters **MOCK mode** — all hardware calls are simulated with print outputs.
 
@@ -247,7 +239,7 @@ source install/setup.bash
 ros2 launch my_cobot_control arm_controller.launch.py
 ```
 
-## 3.5 Test Commands
+## 3.4 Test Commands
 
 All test commands below should be run from a **separate terminal** on the NUC (or any machine on the same ROS_DOMAIN_ID).
 
@@ -262,22 +254,22 @@ ros2 topic echo /arm/gripper_status
 
 ### Test 1: Full pick-and-place cycle
 ```bash
-# Step 1: Send pick coordinates (block location)
-ros2 topic pub --once /arm/target_pick geometry_msgs/Point "{x: 162.5, y: -134.8, z: 87.6}"
+# Step 1: Send pick coordinates (example block location) 
+ros2 topic pub --once /arm/target_pick geometry_msgs/msg/Point "{x: 202.2, y: -129.3, z: 237.9}"
 
 # Wait for status == "holding" (arm has block, at home position)
 # The rover would drive to the bin during this time
 
 # Step 2: Send place coordinates (bin location)
-ros2 topic pub --once /arm/target_place geometry_msgs/Point "{x: 23.8, y: -245.6, z: 102.0}"
-
+ros2 topic pub --once /arm/target_place geometry_msgs/msg/Point "{x: 66.7, y: -218.2, z: 123.7}"
 # Wait for status == "idle" (cycle complete)
+
 ```
 
 ### Test 2: Pick only (verify HOLDING state)
 ```bash
 # Send pick command
-ros2 topic pub --once /arm/target_pick geometry_msgs/Point "{x: 162.5, y: -134.8, z: 87.6}"
+ros2 topic pub --once /arm/target_pick geometry_msgs/msg/Point "{x: 202.2, y: -129.3, z: 237.9}"
 
 # Verify arm enters HOLDING state
 ros2 topic echo /arm/status --once
@@ -335,7 +327,7 @@ A standalone script is available for testing pick-and-place with calibrated coor
 ssh elephant@10.3.14.59
 
 # Run directly with Python (requires pymycobot)
-cd ~/mycobot_ws/src/my_cobot_control/my_cobot_control
+cd ~/ros2_ws/src/my_cobot_control/my_cobot_control
 python3 test_calibration_pick_place.py
 ```
 
@@ -347,7 +339,7 @@ Use the calibration tool to record new home/pickup/place positions by dragging t
 
 ```bash
 # On Pi
-cd ~/mycobot_ws/src/my_cobot_control/my_cobot_control
+cd ~/ros2_ws/src/my_cobot_control/my_cobot_control
 python3 calibration_tool.py
 ```
 
@@ -369,6 +361,7 @@ ros2 run my_cobot_control mycobot_controller --ros-args \
 | `Object lost during lift` | Grip too weak or object slipped | Increase `gripper_torque` parameter (up to 980) |
 | `Coordinate x=... out of range` | Target outside workspace | Check coordinate frame, values must be in mm |
 | Build error: `shebang too long` | venv path hardcoded on Pi | `setup.py` auto-detects venv; rebuild |
+|Timesync issue (hardware clock drift) | Arm movements erratic | Sync Pi clock with NUC: `ssh elephant@10.3.14.59 "sudo date -s '$(date -u +%m%d%H%M%Y.%S)'"`|
 
 
 ---

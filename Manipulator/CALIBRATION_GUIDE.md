@@ -79,11 +79,9 @@ print(f"Cartesian coordinates: {coords}")
 ### Method 2: Using Calibration Tool
 
 ```bash
-# Activate virtual environment
-source /home/student42/mycobot_ws/venv_mycobot/bin/activate
 
 # Run calibration tool
-cd /home/student42/mycobot_ws/src/my_cobot_control/my_cobot_control
+cd ~/ros2_ws/src/my_cobot_control/my_cobot_control
 python3 calibration_tool.py
 ```
 
@@ -111,7 +109,7 @@ python3 calibration_tool.py
 
 ```bash
 # 1. Enter directory
-cd /home/student42/mycobot_ws/src/my_cobot_control/my_cobot_control
+cd ~/ros2_ws/src/my_cobot_control/my_cobot_control
 
 # 2. Run calibration tool
 python3 calibration_tool.py
