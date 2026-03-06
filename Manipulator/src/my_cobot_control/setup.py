@@ -43,12 +43,9 @@ setup(
     },
     entry_points={
         'console_scripts': [
-            'move_to_default = my_cobot_control.move_to_default:main',
-            'pick_and_place = my_cobot_control.pick_and_place:main',
-            'move = my_cobot_control.move:main',
             'pick_and_place_rviz = my_cobot_control.pick_and_place_rviz:main',
-            'pick_and_place_with_feedback = my_cobot_control.pick_and_place_with_feedback:main',
             'mycobot_controller = my_cobot_control.mycobot_controller:main',
+            'mycobot_controller_tf2 = my_cobot_control.mycobot_controller_tf2:main',
         ],
     },
     **_extra_options,

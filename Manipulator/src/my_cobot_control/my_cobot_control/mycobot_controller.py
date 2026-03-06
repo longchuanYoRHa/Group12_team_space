@@ -34,6 +34,7 @@ import threading
 from enum import Enum, auto
 from pathlib import Path
 
+import numpy as np
 import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Point
@@ -152,11 +153,19 @@ class MyCobotController(Node):
         self.declare_parameter('end_ry', 4.73)
         self.declare_parameter('end_rz', -85.94)
         self.declare_parameter('gripper_torque', 300)     # 150-980
-        self.declare_parameter('grip_threshold', 5)       # gripper val > this = held
+        self.declare_parameter('grip_threshold', 25)       # gripper val > this = held
         self.declare_parameter('grip_check_retries', 2)
-        self.declare_parameter('home_angles',
-                               [5.18, 4.92, -10.45, 5.62, 2.1, -9.4])
+        self.declare_parameter('home_angles', [0, 0, 0, 0, 0, 0])
         self.declare_parameter('calibration_file', '')
+        
+        # Camera to arm base transform parameters
+        self.declare_parameter('camera_to_base_x', 0.0)      # mm
+        self.declare_parameter('camera_to_base_y', 0.0)      # mm
+        self.declare_parameter('camera_to_base_z', 0.0)      # mm
+        self.declare_parameter('camera_to_base_rx', 0.0)     # degrees
+        self.declare_parameter('camera_to_base_ry', 0.0)     # degrees
+        self.declare_parameter('camera_to_base_rz', 0.0)     # degrees
+        self.declare_parameter('use_camera_transform', False)
 
         self._safe_z         = self.get_parameter('safe_z').value
         self._move_speed     = self.get_parameter('move_speed').value
@@ -170,6 +179,17 @@ class MyCobotController(Node):
         self._grip_threshold = self.get_parameter('grip_threshold').value
         self._grip_retries   = self.get_parameter('grip_check_retries').value
         self._home_angles    = list(self.get_parameter('home_angles').value)
+        
+        # Camera transform parameters
+        self._use_camera_transform = self.get_parameter('use_camera_transform').value
+        self._camera_to_base = [
+            self.get_parameter('camera_to_base_x').value,
+            self.get_parameter('camera_to_base_y').value,
+            self.get_parameter('camera_to_base_z').value,
+            self.get_parameter('camera_to_base_rx').value,
+            self.get_parameter('camera_to_base_ry').value,
+            self.get_parameter('camera_to_base_rz').value,
+        ]
 
         # ---- Load calibration (optional override) ---------------------------
         self._calibration = {}
@@ -234,6 +254,8 @@ class MyCobotController(Node):
         self.get_logger().info(f'  Home angles : {self._home_angles}')
         self.get_logger().info(f'  End orient. : {self._end_rpy}')
         self.get_logger().info(f'  Safe Z      : {self._safe_z} mm')
+        if self._use_camera_transform:
+            self.get_logger().info(f'  Camera->Base: {self._camera_to_base[:3]} mm, {self._camera_to_base[3:]} deg')
         self.get_logger().info('Waiting for target_pick ...')
 
     # ======================================================================
@@ -256,6 +278,69 @@ class MyCobotController(Node):
             self._load_calibration(str(cal_files[-1]))
 
     # ======================================================================
+    # Camera to Base Coordinate Transform
+    # ======================================================================
+    def _transform_camera_to_base(self, x_cam, y_cam, z_cam):
+        """
+        Transform coordinates from camera frame to robot base frame.
+        
+        Args:
+            x_cam, y_cam, z_cam: Coordinates in camera frame (mm)
+            
+        Returns:
+            (x_base, y_base, z_base): Coordinates in robot base frame (mm)
+        """
+        if not self._use_camera_transform:
+            # No transform, pass through
+            return x_cam, y_cam, z_cam
+        
+        # Extract translation and rotation
+        tx, ty, tz = self._camera_to_base[:3]
+        rx, ry, rz = self._camera_to_base[3:]
+        
+        # Convert angles to radians
+        rx_rad = math.radians(rx)
+        ry_rad = math.radians(ry)
+        rz_rad = math.radians(rz)
+        
+        # Build rotation matrices (ZYX Euler angles)
+        cos_rx, sin_rx = math.cos(rx_rad), math.sin(rx_rad)
+        cos_ry, sin_ry = math.cos(ry_rad), math.sin(ry_rad)
+        cos_rz, sin_rz = math.cos(rz_rad), math.sin(rz_rad)
+        
+        # Rotation matrix around X axis
+        Rx = np.array([
+            [1,      0,       0],
+            [0, cos_rx, -sin_rx],
+            [0, sin_rx,  cos_rx]
+        ])
+        
+        # Rotation matrix around Y axis
+        Ry = np.array([
+            [ cos_ry, 0, sin_ry],
+            [      0, 1,      0],
+            [-sin_ry, 0, cos_ry]
+        ])
+        
+        # Rotation matrix around Z axis
+        Rz = np.array([
+            [cos_rz, -sin_rz, 0],
+            [sin_rz,  cos_rz, 0],
+            [     0,       0, 1]
+        ])
+        
+        # Combined rotation matrix (rotation order: Z-Y-X)
+        R = Rz @ Ry @ Rx
+        
+        # Point in camera frame
+        p_cam = np.array([x_cam, y_cam, z_cam])
+        
+        # Transform: p_base = R * p_cam + t
+        p_base = R @ p_cam + np.array([tx, ty, tz])
+        
+        return float(p_base[0]), float(p_base[1]), float(p_base[2])
+
+    # ======================================================================
     # Callbacks -- PICK and PLACE are independent triggers
     # ======================================================================
     def _pick_cb(self, msg: Point):
@@ -264,13 +349,30 @@ class MyCobotController(Node):
             self.get_logger().warn(
                 f'Ignoring target_pick (state={self._state.name})')
             return
-        if not self._validate_coords(msg):
+        
+        # Transform from camera coordinates to base coordinates if needed
+        x_base, y_base, z_base = self._transform_camera_to_base(msg.x, msg.y, msg.z)
+        
+        # Create transformed point
+        target = Point()
+        target.x = x_base
+        target.y = y_base
+        target.z = z_base
+        
+        if not self._validate_coords(target):
             return
-
-        self.get_logger().info(
-            f'[PICK] Target received: ({msg.x:.1f}, {msg.y:.1f}, {msg.z:.1f})')
+        
+        if self._use_camera_transform:
+            self.get_logger().info(
+                f'[PICK] Camera coords: ({msg.x:.1f}, {msg.y:.1f}, {msg.z:.1f}) mm')
+            self.get_logger().info(
+                f'[PICK] Base coords:   ({x_base:.1f}, {y_base:.1f}, {z_base:.1f}) mm')
+        else:
+            self.get_logger().info(
+                f'[PICK] Target received: ({x_base:.1f}, {y_base:.1f}, {z_base:.1f})')
+        
         self._task_thread = threading.Thread(
-            target=self._run_pick, args=(msg,), daemon=True)
+            target=self._run_pick, args=(target,), daemon=True)
         self._task_thread.start()
 
     def _place_cb(self, msg: Point):
@@ -280,13 +382,30 @@ class MyCobotController(Node):
                 f'Ignoring target_place (state={self._state.name}, '
                 f'need HOLDING)')
             return
-        if not self._validate_coords(msg):
+        
+        # Transform from camera coordinates to base coordinates if needed
+        x_base, y_base, z_base = self._transform_camera_to_base(msg.x, msg.y, msg.z)
+        
+        # Create transformed point
+        target = Point()
+        target.x = x_base
+        target.y = y_base
+        target.z = z_base
+        
+        if not self._validate_coords(target):
             return
-
-        self.get_logger().info(
-            f'[PLACE] Target received: ({msg.x:.1f}, {msg.y:.1f}, {msg.z:.1f})')
+        
+        if self._use_camera_transform:
+            self.get_logger().info(
+                f'[PLACE] Camera coords: ({msg.x:.1f}, {msg.y:.1f}, {msg.z:.1f}) mm')
+            self.get_logger().info(
+                f'[PLACE] Base coords:   ({x_base:.1f}, {y_base:.1f}, {z_base:.1f}) mm')
+        else:
+            self.get_logger().info(
+                f'[PLACE] Target received: ({x_base:.1f}, {y_base:.1f}, {z_base:.1f})')
+        
         self._task_thread = threading.Thread(
-            target=self._run_place, args=(msg,), daemon=True)
+            target=self._run_place, args=(target,), daemon=True)
         self._task_thread.start()
 
     # ======================================================================
