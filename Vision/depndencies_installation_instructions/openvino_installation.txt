@@ -1,0 +1,30 @@
+------------------------------------------------------------
+OPENVINO INSTALLATION USING PIP (VIRTUAL ENVIRONMENT GUIDE)
+------------------------------------------------------------
+
+1. ACTIVATE YOUR VIRTUAL ENVIRONMENT
+source robots/bin/activate
+
+
+2. UPGRADE PIP
+pip install --upgrade pip
+
+
+3. INSTALL OPENVINO (DEVELOPER PACKAGE)
+pip install openvino-dev
+
+
+4. VERIFY YOUR INSTALLATION
+python - << 'EOF'
+from openvino.runtime import Core
+ie = Core()
+print("OpenVINO devices:", ie.get_available_devices())
+EOF
+
+
+EXPECTED OUTPUT:
+OpenVINO devices: ['CPU']
+
+------------------------------------------------------------
+OpenVINO is now successfully installed inside your .venv.
+------------------------------------------------------------
