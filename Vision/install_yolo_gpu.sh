@@ -1,1 +1,0 @@
-echo "pip install -U ultralytics openvino" > install_yolo.sh

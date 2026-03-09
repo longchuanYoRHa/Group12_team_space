@@ -1,0 +1,41 @@
+# Camera to Arm Base Coordinate Transform Configuration
+# 摄像头到机械臂基座的坐标转换配置
+
+/**:
+  ros__parameters:
+    # Enable camera coordinate transformation
+    # 启用摄像头坐标转换
+    use_camera_transform: true
+    
+    # Translation from camera origin to arm base (in mm)
+    # 从摄像头原点到机械臂基座的平移（单位：毫米）
+    camera_to_base_x: 150.0    # Forward/backward (X轴偏移)
+    camera_to_base_y: -200.0   # Left/right (Y轴偏移)
+    camera_to_base_z: 300.0    # Up/down (Z轴偏移)
+    
+    # Rotation from camera frame to arm base frame (in degrees)
+    # 从摄像头坐标系到机械臂坐标系的旋转（单位：度）
+    camera_to_base_rx: 0.0     # Roll around X axis (绕X轴旋转)
+    camera_to_base_ry: 0.0     # Pitch around Y axis (绕Y轴旋转)
+    camera_to_base_rz: 0.0     # Yaw around Z axis (绕Z轴旋转)
+    
+    # Example configurations for common camera placements:
+    # 常见摄像头安装位置的配置示例：
+    
+    # Example 1: Camera mounted on top, looking down
+    # 示例1：摄像头安装在上方，向下看
+    # camera_to_base_x: 0.0
+    # camera_to_base_y: 0.0
+    # camera_to_base_z: 500.0
+    # camera_to_base_rx: 180.0
+    # camera_to_base_ry: 0.0
+    # camera_to_base_rz: 0.0
+    
+    # Example 2: Camera mounted on front of rover
+    # 示例2：摄像头安装在小车前方
+    # camera_to_base_x: 200.0    # Camera is 200mm in front
+    # camera_to_base_y: 0.0
+    # camera_to_base_z: 150.0    # Camera is 150mm above base
+    # camera_to_base_rx: 0.0
+    # camera_to_base_ry: -30.0   # Camera tilted down 30 degrees
+    # camera_to_base_rz: 0.0

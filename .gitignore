@@ -10,3 +10,13 @@
 # *.iges
 # *.IGES
 
+*.pdf
+*.xlsx
+*.bkp
+*.zip
+
+.vscode/
+build/
+install/
+share/
+log/

@@ -1,0 +1,45 @@
+------------------------------------------------------------
+EXPORT YOLO11N TO OPENVINO FORMAT
+Destination: ~/vision_testing/models
+------------------------------------------------------------
+
+1. ACTIVATE YOUR VIRTUAL ENVIRONMENT
+source robots/bin/activate
+
+2. UPGRADE PIP (RECOMMENDED)
+pip install --upgrade pip
+
+3. INSTALL ULTRALYTICS (YOLO11 SUPPORT)
+pip install ultralytics
+
+4. INSTALL OPENVINO (REQUIRED FOR EXPORT)
+pip install openvino-dev
+
+5. CHANGE DIRECTORY TO YOUR MODELS FOLDER
+cd ~/vision_testing/models
+
+6. DOWNLOAD YOLO11N AND EXPORT TO OPENVINO FORMAT
+python - << 'EOF'
+from ultralytics import YOLO
+
+# Load YOLO11n (auto-downloads .pt file)
+model = YOLO("yolo11n.pt")
+
+# Export the model to OpenVINO format
+model.export(format="openvino")
+
+print("YOLO11n OpenVINO export complete.")
+print("Files saved into: ~/vision_testing/models")
+EOF
+
+------------------------------------------------------------
+EXPECTED OUTPUT FILES IN ~/vision_testing/models
+------------------------------------------------------------
+yolo11n.pt
+yolo11n_openvino_model.xml
+yolo11n_openvino_model.bin
+yolo11n_openvino_model.mapping   (optional)
+
+------------------------------------------------------------
+Your YOLO11n OpenVINO model is ready for inference.
+------------------------------------------------------------

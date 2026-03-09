@@ -1,1 +1,0 @@
-echo "pip install ultralytics" > install_yolo.sh
