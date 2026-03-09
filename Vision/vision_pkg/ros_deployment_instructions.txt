@@ -1,0 +1,27 @@
+# --- TERMINAL 1: BUILD AND RUN NODE ---
+source /opt/ros/jazzy/setup.bash
+source /home/student04/robots/bin/activate
+cd /home/student04/test/vision_pkg
+
+# Build the package
+colcon build --packages-select vision_pkg
+
+# Bridge the venv to the ROS2 install directory (Symlink)
+mkdir -p install/vision_pkg/lib/python3.12/site-packages/
+ln -sf /home/student04/robots/lib/python3.12/site-packages/* install/vision_pkg/lib/python3.12/site-packages/
+
+# Source and Configure Middleware
+source install/setup.bash
+export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+
+# Run the Node
+ros2 run vision_pkg rover_vision
+
+
+# --- TERMINAL 2: VERIFY TOPIC ---
+source /opt/ros/jazzy/setup.bash
+export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+
+# Echo the topic with Reliable QoS
+ros2 topic echo /target_pick/green --qos-reliability reliable
+
