@@ -1,0 +1,7 @@
+path: /home/student04/json/red_cube/YOLODataset
+train: images/train
+val: images/val
+test:
+
+names:
+    0: red_cube
