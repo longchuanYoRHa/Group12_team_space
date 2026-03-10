@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
 Task manager state machine node.
-Implements the full Explore-Pick-Stow-SearchBin-Place workflow.
+Implements the full Explore-Pick-SearchBin-Place workflow (grasp then go directly to bin, no stow).
 
 This node is the core scheduler of the system, responsible for:
 1. Controlling the start and stop of exploration behavior (explore_lite)
-2. Subscribing to object detector (object_detector) and bin detector (bin_detector)
+2. Subscribing to rover_vision_node topics (/target_pick/*, /target_place/*)
 3. Coordinating Nav2 navigation for goal execution
-4. Invoking arm manipulation actions (grasp, stow, place)
+4. Invoking arm manipulation actions (grasp, place)
 5. Managing state transitions and error recovery
 """
 
@@ -21,8 +21,12 @@ import geometry_msgs.msg as geometry_msgs
 import nav2_msgs.action as nav2_msgs
 import std_msgs.msg as std_msgs
 from enum import Enum
-import math
 import time
+
+from real_Nav_test.task_manager_utils import (
+    is_pose_in_blacklist as check_pose_in_blacklist,
+    compute_pregrasp_pose,
+)
 
 
 class CargoState(Enum):
@@ -46,7 +50,6 @@ class TaskState(Enum):
     NAV_TO_OBJECT_PREGRASP = "nav_to_object_pregrasp"  # Navigate to object pregrasp pose
     PRECISION_ALIGN_OBJECT = "precision_align_object"  # Precision align to object (optional)
     GRASP = "grasp"                        # Grasp: execute grasp action
-    STOW_ON_ROBOT = "stow_on_robot"        # Stow: move object to onboard stow pose
     RESUME_EXPLORE_FOR_BIN = "resume_explore_for_bin"  # Resume exploration to find bin
     BIN_FOUND = "bin_found"                # Bin found: bin detected
     NAV_TO_BIN_PREPLACE = "nav_to_bin_preplace"  # Navigate to bin preplace pose
@@ -59,237 +62,135 @@ class TaskManagerNode(Node):
     """
     Task manager state machine node.
 
-    Core control node that implements a state machine to coordinate:
-    - Exploration (explore_lite)
-    - Navigation (Nav2)
-    - Object detection (object_detector)
-    - Bin detection (bin_detector)
-    - Arm manipulation (grasp/stow/place actions)
+    Core control node: exploration (explore_lite), Nav2, rover_vision_node topics,
+    arm manipulation (grasp, place). No stow: grasp then go directly to bin.
     """
 
     def __init__(self):
         super().__init__('task_manager')
 
         # ========== State variables ==========
-        self.current_state = TaskState.INIT  # Current task state
-        self.cargo_state = CargoState.EMPTY  # Cargo state (empty/loaded)
-        self.home_pose = None  # Start pose for return after task
-        self.object_pose = None  # Detected object pose (map frame)
-        self.bin_pose = None  # Detected bin pose (map frame)
-        self.stow_pose = None  # Onboard stow pose (arm_base frame, fixed)
+        self.current_state = TaskState.INIT
+        self.cargo_state = CargoState.EMPTY
+        self.home_pose = None
+        self.object_pose = None
+        self.bin_pose = None
 
         # ========== Detection stability counters ==========
-        # Multi-frame confirmation to reduce false positives
-        self.object_detection_count = 0  # Consecutive object detection frames
-        self.bin_detection_count = 0  # Consecutive bin detection frames
-        self.required_detection_frames = 5  # Frames required for stable detection (N-frame confirm)
+        self.object_detection_count = 0
+        self.bin_detection_count = 0
+        self.required_detection_frames = 5
 
         # ========== Retry counters ==========
-        # For failure recovery
-        self.grasp_retry_count = 0  # Grasp retry count
-        self.max_grasp_retries = 2  # Max grasp retries
-        self.stow_retry_count = 0  # Stow retry count
-        self.max_stow_retries = 2  # Max stow retries
-        self.place_retry_count = 0  # Place retry count
-        self.max_place_retries = 2  # Max place retries
+        self.grasp_retry_count = 0
+        self.max_grasp_retries = 2
+        self.place_retry_count = 0
+        self.max_place_retries = 2
 
         # ========== Failed object blacklist ==========
-        # Record failed grasp positions to avoid repeated attempts
-        self.object_blacklist = []  # Blacklist position list
-        self.blacklist_radius = 0.3  # Blacklist radius (m); objects within are ignored
+        self.object_blacklist = []
+        self.blacklist_radius = 0.3
 
         # ========== Action clients ==========
-        # Nav2 navigation action client
         self.nav2_client = ActionClient(self, nav2_msgs.NavigateToPose, 'navigate_to_pose')
-        self.nav2_goal_handle = None  # Current navigation goal handle
+        self.nav2_goal_handle = None
 
         # ========== Publishers ==========
-        # Control explore_lite start/stop via /explore/resume topic
+        # Control explore_lite start/stop (publish only on change)
         self.explore_control_pub = self.create_publisher(
             std_msgs.Bool, 'explore/resume', 10
         )
-        # Publish current state (for monitoring and debugging)
-        self.state_pub = self.create_publisher(
-            std_msgs.String, 'task_manager/state', 10
-        )
-        # Publish cargo state (for monitoring and debugging)
-        self.cargo_state_pub = self.create_publisher(
-            std_msgs.String, 'task_manager/cargo_state', 10
-        )
+        self._last_explore_resume = None
+        self.state_pub = self.create_publisher(std_msgs.String, 'task_manager/state', 10)
+        self.cargo_state_pub = self.create_publisher(std_msgs.String, 'task_manager/cargo_state', 10)
 
-        # ========== Subscribers ==========
-        # TODO: Replace with actual object_detector topic
-        # Subscribe to object pose from object detector
-        self.object_pose_sub = self.create_subscription(
-            geometry_msgs.PoseStamped,
-            'object_detector/object_pose',  # Placeholder
-            self.object_pose_callback,
-            qos_profile_sensor_data
-        )
-
-        # Subscribe to camera-detected object coordinates (obj_xy topic)
-        # Assumes geometry_msgs.PointStamped (x, y, z); adjust if message type differs
-        self.obj_xy_sub = self.create_subscription(
-            geometry_msgs.PointStamped,
-            'obj_xy',
-            self.obj_xy_callback,
-            qos_profile_sensor_data
-        )
-
-        # TODO: Replace with actual bin_detector topic
-        # Subscribe to bin pose from bin detector
-        self.bin_pose_sub = self.create_subscription(
-            geometry_msgs.PoseStamped,
-            'bin_detector/bin_pose',  # Placeholder
-            self.bin_pose_callback,
-            qos_profile_sensor_data
-        )
+        # ========== Subscribers (aligned with rover_vision_node) ==========
+        for topic in ['/target_pick/red', '/target_pick/green', '/target_pick/blue']:
+            self.create_subscription(
+                geometry_msgs.Point, topic, self.object_point_callback, qos_profile_sensor_data
+            )
+        for topic in ['/target_place/red', '/target_place/green', '/target_place/blue']:
+            self.create_subscription(
+                geometry_msgs.Point, topic, self.bin_point_callback, qos_profile_sensor_data
+            )
 
         # ========== TF ==========
-        # For frame transforms (map <-> base_link <-> arm_base, etc.)
         self.tf_buffer = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
 
         # ========== State machine timer ==========
-        # Run state machine logic every 0.1 s (10 Hz)
         self.state_timer = self.create_timer(0.1, self.state_machine_callback)
 
         # ========== Node parameters ==========
-        self.declare_parameter('pregrasp_distance', 0.5)  # Pregrasp distance (m)
-        self.declare_parameter('preplace_distance', 0.6)  # Preplace distance (m)
-        self.declare_parameter('stow_pose_x', 0.3)  # Stow pose X
-        self.declare_parameter('stow_pose_y', 0.0)  # Stow pose Y
-        self.declare_parameter('stow_pose_z', 0.2)  # Stow pose Z
+        self.declare_parameter('pregrasp_distance', 0.5)
+        self.declare_parameter('preplace_distance', 0.6)
+        self.declare_parameter('camera_frame_id', 'camera_depth_optical_frame')
 
         self.get_logger().info('Task manager node initialized')
-        
-    def object_pose_callback(self, msg):
-        """
-        Object pose detection callback.
+    def _point_to_pose_stamped_in_map(self, point_msg):
+        """Transform geometry_msgs.Point (vision, camera frame) to PoseStamped in map frame."""
+        frame_id = self.get_parameter('camera_frame_id').value
+        point_stamped = geometry_msgs.PointStamped()
+        point_stamped.header.frame_id = frame_id
+        point_stamped.header.stamp = self.get_clock().now().to_msg()
+        point_stamped.point = point_msg
+        try:
+            transform = self.tf_buffer.lookup_transform(
+                'map', frame_id, rclpy.time.Time(),
+                timeout=rclpy.duration.Duration(seconds=0.5)
+            )
+            point_in_map = tf2_geometry_msgs.do_transform_point(point_stamped, transform)
+            pose_stamped = geometry_msgs.PoseStamped()
+            pose_stamped.header.frame_id = 'map'
+            pose_stamped.header.stamp = self.get_clock().now().to_msg()
+            pose_stamped.pose.position = point_in_map.point
+            pose_stamped.pose.orientation.w = 1.0
+            return pose_stamped
+        except Exception as e:
+            self.get_logger().warn(f'TF transform failed: {e}, using raw coords (assumed map)')
+            pose_stamped = geometry_msgs.PoseStamped()
+            pose_stamped.header.frame_id = 'map'
+            pose_stamped.header.stamp = self.get_clock().now().to_msg()
+            pose_stamped.pose.position = point_msg
+            pose_stamped.pose.orientation.w = 1.0
+            return pose_stamped
 
-        Called when the object detector publishes a new object pose.
-        Only processes object detection when empty and in EXPLORE state.
-        Uses multi-frame confirmation to reduce false positives.
-
-        Args:
-            msg: geometry_msgs.msg.PoseStamped, object pose (map frame)
-        """
-        # Only process object detection when empty and exploring
-        if self.cargo_state == CargoState.EMPTY and self.current_state == TaskState.EXPLORE:
-            # Skip if position is in blacklist (previous failed grasp)
-            if self.is_pose_in_blacklist(msg.pose.position):
+    def object_point_callback(self, msg):
+        """Object (pick) detection; /target_pick/red, green, blue -> geometry_msgs.Point."""
+        if self.cargo_state != CargoState.EMPTY or self.current_state != TaskState.EXPLORE:
+            self.object_detection_count = 0
+            return
+        try:
+            pose_stamped = self._point_to_pose_stamped_in_map(msg)
+            if check_pose_in_blacklist(pose_stamped.pose.position, self.object_blacklist, self.blacklist_radius):
                 return
-
-            self.object_pose = msg
+            self.object_pose = pose_stamped
             self.object_detection_count += 1
-
             if self.object_detection_count >= self.required_detection_frames:
                 self.get_logger().info('Object found and confirmed!')
                 self.current_state = TaskState.OBJECT_FOUND
                 self.object_detection_count = 0
-        else:
-            self.object_detection_count = 0
-    
-    def obj_xy_callback(self, msg):
-        """
-        Camera object coordinates callback.
-
-        Called when the camera detects an object and publishes to obj_xy.
-        Converts coordinates to PoseStamped and stores for navigation.
-
-        Args:
-            msg: geometry_msgs.msg.PointStamped, object coordinates (may be in different frame)
-        """
-        try:
-            # Convert PointStamped to PoseStamped; transform to map if needed
-            if msg.header.frame_id != 'map':
-                try:
-                    msg_time = rclpy.time.Time.from_msg(msg.header.stamp)
-
-                    transform = self.tf_buffer.lookup_transform(
-                        'map',
-                        msg.header.frame_id,
-                        msg_time,
-                        timeout=rclpy.duration.Duration(seconds=0.5)
-                    )
-
-                    point_stamped_in_map = tf2_geometry_msgs.do_transform_point(msg, transform)
-
-                    pose_stamped = geometry_msgs.PoseStamped()
-                    pose_stamped.header.frame_id = 'map'
-                    pose_stamped.header.stamp = self.get_clock().now().to_msg()
-                    pose_stamped.pose.position = point_stamped_in_map.point
-                    pose_stamped.pose.orientation.w = 1.0
-
-                    self.object_pose = pose_stamped
-                    self.get_logger().info(
-                        f'Object coords ({msg.header.frame_id}): ({msg.point.x:.2f}, {msg.point.y:.2f}, {msg.point.z:.2f}), '
-                        f'map: ({pose_stamped.pose.position.x:.2f}, {pose_stamped.pose.position.y:.2f}, {pose_stamped.pose.position.z:.2f})'
-                    )
-                except Exception as e:
-                    self.get_logger().warn(f'TF transform failed: {e}, using raw coords (assumed map)')
-                    pose_stamped = geometry_msgs.PoseStamped()
-                    pose_stamped.header.frame_id = 'map'
-                    pose_stamped.header.stamp = self.get_clock().now().to_msg()
-                    pose_stamped.pose.position = msg.point
-                    pose_stamped.pose.orientation.w = 1.0
-                    self.object_pose = pose_stamped
-            else:
-                pose_stamped = geometry_msgs.PoseStamped()
-                pose_stamped.header.frame_id = 'map'
-                pose_stamped.header.stamp = self.get_clock().now().to_msg()
-                pose_stamped.pose.position = msg.point
-                pose_stamped.pose.orientation.w = 1.0
-                self.object_pose = pose_stamped
-                self.get_logger().info(
-                    f'Object coords (map): ({msg.point.x:.2f}, {msg.point.y:.2f}, {msg.point.z:.2f})'
-                )
         except Exception as e:
-            self.get_logger().error(f'Error processing obj_xy message: {e}')
-    
-    def bin_pose_callback(self, msg):
-        """
-        Bin pose detection callback.
+            self.get_logger().error(f'Error processing target_pick message: {e}')
+            self.object_detection_count = 0
 
-        Called when the bin detector publishes a new bin pose.
-        Only processes when loaded and in RESUME_EXPLORE_FOR_BIN state.
-        Uses multi-frame confirmation to reduce false positives.
-
-        Args:
-            msg: geometry_msgs.msg.PoseStamped, bin pose (map frame)
-        """
-        if self.cargo_state == CargoState.HAS_OBJECT and self.current_state == TaskState.RESUME_EXPLORE_FOR_BIN:
-            self.bin_pose = msg
+    def bin_point_callback(self, msg):
+        """Bin (place) detection; /target_place/red, green, blue -> geometry_msgs.Point."""
+        if self.cargo_state != CargoState.HAS_OBJECT or self.current_state != TaskState.RESUME_EXPLORE_FOR_BIN:
+            self.bin_detection_count = 0
+            return
+        try:
+            pose_stamped = self._point_to_pose_stamped_in_map(msg)
+            self.bin_pose = pose_stamped
             self.bin_detection_count += 1
-
             if self.bin_detection_count >= self.required_detection_frames:
                 self.get_logger().info('Bin found and confirmed!')
                 self.current_state = TaskState.BIN_FOUND
                 self.bin_detection_count = 0
-        else:
+        except Exception as e:
+            self.get_logger().error(f'Error processing target_place message: {e}')
             self.bin_detection_count = 0
-    
-    def is_pose_in_blacklist(self, position):
-        """
-        Check if a position is in the blacklist.
 
-        Used to avoid repeated attempts at previously failed grasp positions.
-
-        Args:
-            position: geometry_msgs.msg.Point, position to check
-
-        Returns:
-            bool: True if within blacklist radius, else False
-        """
-        for blacklist_pos in self.object_blacklist:
-            distance = math.sqrt(
-                (position.x - blacklist_pos.x)**2 +
-                (position.y - blacklist_pos.y)**2
-            )
-            if distance < self.blacklist_radius:
-                return True
-        return False
-    
     def state_machine_callback(self):
         """
         State machine main callback.
@@ -323,8 +224,6 @@ class TaskManagerNode(Node):
             self.handle_precision_align_object_state()
         elif self.current_state == TaskState.GRASP:
             self.handle_grasp_state()
-        elif self.current_state == TaskState.STOW_ON_ROBOT:
-            self.handle_stow_on_robot_state()
         elif self.current_state == TaskState.RESUME_EXPLORE_FOR_BIN:
             self.handle_resume_explore_for_bin_state()
         elif self.current_state == TaskState.BIN_FOUND:
@@ -364,22 +263,20 @@ class TaskManagerNode(Node):
             self.get_logger().warn(f'Waiting for TF: {e}')
     
     def handle_explore_state(self):
-        """
-        Handle explore state.
+        """Start or resume explore_lite. Object detection in object_point_callback (/target_pick/*)."""
+        self._publish_explore_resume_if_changed(True)
 
-        Start or resume explore_lite. Object detection is handled asynchronously in object_pose_callback.
-        """
-        explore_msg = std_msgs.Bool()
-        explore_msg.data = True
-        self.explore_control_pub.publish(explore_msg)
-    
+    def _publish_explore_resume_if_changed(self, resume: bool):
+        """Publish to explore/resume only when the value changes."""
+        if self._last_explore_resume is not None and self._last_explore_resume == resume:
+            return
+        self._last_explore_resume = resume
+        msg = std_msgs.Bool()
+        msg.data = resume
+        self.explore_control_pub.publish(msg)
+
     def handle_object_found_state(self):
-        """
-        Handle object found state.
-
-        When object is stably detected, check if coords were received from obj_xy.
-        If yes, go to PAUSE_EXPLORE; otherwise keep waiting.
-        """
+        """When object is stably detected, go to PAUSE_EXPLORE if coords available."""
         if self.object_pose is not None:
             self.get_logger().info(
                 f'Object found, coords received: ({self.object_pose.pose.position.x:.2f}, '
@@ -388,23 +285,14 @@ class TaskManagerNode(Node):
             )
             self.current_state = TaskState.PAUSE_EXPLORE
         else:
-            self.get_logger().debug('Object found, waiting for obj_xy coords...')
-    
-    def handle_pause_explore_state(self):
-        """
-        Handle pause explore state.
+            self.get_logger().debug('Object found, waiting for target_pick coords...')
 
-        Cancel current Nav2 goal, stop explore_lite, prepare for grasp or place.
-        Used for both object grasp and bin place scenarios.
-        """
+    def handle_pause_explore_state(self):
+        """Cancel Nav2 goal, stop explore_lite, prepare for grasp or place."""
         if self.nav2_goal_handle is not None:
             self.nav2_client.cancel_goal_async(self.nav2_goal_handle)
             self.nav2_goal_handle = None
-
-        explore_msg = std_msgs.Bool()
-        explore_msg.data = False
-        self.explore_control_pub.publish(explore_msg)
-
+        self._publish_explore_resume_if_changed(False)
         if self.cargo_state == CargoState.EMPTY:
             self.current_state = TaskState.NAV_TO_OBJECT_PREGRASP
         else:
@@ -420,13 +308,14 @@ class TaskManagerNode(Node):
             self.get_logger().error('Object pose not available!')
             self.current_state = TaskState.EXPLORE
             return
-
+        robot_x, robot_y = self._get_robot_xy_in_map()
         pregrasp_distance = self.get_parameter('pregrasp_distance').value
-        goal_pose = self.calculate_pregrasp_pose(self.object_pose, pregrasp_distance)
-
+        goal_pose = compute_pregrasp_pose(
+            self.object_pose, pregrasp_distance, robot_x, robot_y,
+            frame_id='map', stamp=self.get_clock().now().to_msg()
+        )
         goal_msg = nav2_msgs.NavigateToPose.Goal()
         goal_msg.pose = goal_pose
-
         if self.nav2_goal_handle is None:
             self.get_logger().info('Sending Nav2 goal to object pregrasp')
             send_goal_future = self.nav2_client.send_goal_async(goal_msg)
@@ -468,7 +357,8 @@ class TaskManagerNode(Node):
             self.get_logger().info('Grasp succeeded!')
             self.cargo_state = CargoState.HAS_OBJECT
             self.grasp_retry_count = 0
-            self.current_state = TaskState.STOW_ON_ROBOT
+            self.adjust_nav2_for_carry_mode(True)
+            self.current_state = TaskState.RESUME_EXPLORE_FOR_BIN
         else:
             self.grasp_retry_count += 1
             if self.grasp_retry_count >= self.max_grasp_retries:
@@ -481,41 +371,9 @@ class TaskManagerNode(Node):
                 self.get_logger().info(f'Grasp failed, retrying ({self.grasp_retry_count}/{self.max_grasp_retries})')
                 self.current_state = TaskState.PRECISION_ALIGN_OBJECT
     
-    def handle_stow_on_robot_state(self):
-        """
-        Handle stow on robot state.
-
-        Move grasped object to onboard stow pose. On success, enable carry mode (adjust Nav2) and go to RESUME_EXPLORE_FOR_BIN.
-        """
-        # TODO: Call actual stow action
-        self.get_logger().info('Calling stow action (placeholder)')
-
-        stow_success = True  # Placeholder
-
-        if stow_success:
-            self.get_logger().info('Stow succeeded!')
-            self.stow_retry_count = 0
-            self.adjust_nav2_for_carry_mode(True)
-            self.current_state = TaskState.RESUME_EXPLORE_FOR_BIN
-        else:
-            self.stow_retry_count += 1
-            if self.stow_retry_count >= self.max_stow_retries:
-                self.get_logger().warn('Stow failed, max retries reached')
-                self.stow_retry_count = 0
-                self.current_state = TaskState.RESUME_EXPLORE_FOR_BIN
-            else:
-                self.get_logger().info(f'Stow failed, retrying ({self.stow_retry_count}/{self.max_stow_retries})')
-                self.current_state = TaskState.GRASP
-    
     def handle_resume_explore_for_bin_state(self):
-        """
-        Handle resume explore for bin state.
-
-        Resume explore_lite with bin as target. Bin detection is async in bin_pose_callback.
-        """
-        explore_msg = std_msgs.Bool()
-        explore_msg.data = True
-        self.explore_control_pub.publish(explore_msg)
+        """Resume explore_lite with bin as target. Bin detection in bin_point_callback (/target_place/*)."""
+        self._publish_explore_resume_if_changed(True)
 
     def handle_bin_found_state(self):
         """
@@ -536,13 +394,14 @@ class TaskManagerNode(Node):
             self.get_logger().error('Bin pose not available!')
             self.current_state = TaskState.RESUME_EXPLORE_FOR_BIN
             return
-
+        robot_x, robot_y = self._get_robot_xy_in_map()
         preplace_distance = self.get_parameter('preplace_distance').value
-        goal_pose = self.calculate_pregrasp_pose(self.bin_pose, preplace_distance)
-
+        goal_pose = compute_pregrasp_pose(
+            self.bin_pose, preplace_distance, robot_x, robot_y,
+            frame_id='map', stamp=self.get_clock().now().to_msg()
+        )
         goal_msg = nav2_msgs.NavigateToPose.Goal()
         goal_msg.pose = goal_pose
-
         if self.nav2_goal_handle is None:
             self.get_logger().info('Sending Nav2 goal to bin preplace')
             send_goal_future = self.nav2_client.send_goal_async(goal_msg)
@@ -573,7 +432,7 @@ class TaskManagerNode(Node):
         """
         Handle place in bin state.
 
-        Execute place action (stow -> bin). Includes retry on failure.
+        Execute place action (gripper -> bin). Includes retry on failure.
         """
         # TODO: Call actual place action
         self.get_logger().info('Calling place action (placeholder)')
@@ -605,59 +464,19 @@ class TaskManagerNode(Node):
         self.get_logger().info('Post action: returning to explore')
         self.current_state = TaskState.EXPLORE
     
-    def calculate_pregrasp_pose(self, target_pose, distance):
-        """
-        Compute pregrasp/preplace pose.
-
-        Compute a pose in front of target at given distance, facing target.
-        Used for object grasp and bin place navigation.
-
-        Args:
-            target_pose: geometry_msgs.msg.PoseStamped, target pose (map frame)
-            distance: float, standoff distance (m)
-
-        Returns:
-            geometry_msgs.msg.PoseStamped: pregrasp/preplace pose (map frame)
-        """
-        goal_pose = geometry_msgs.PoseStamped()
-        goal_pose.header.frame_id = 'map'
-        goal_pose.header.stamp = self.get_clock().now().to_msg()
-
+    def _get_robot_xy_in_map(self):
+        """Get base_link (x, y) in map from TF; return (0.0, 0.0) on failure."""
         try:
             transform = self.tf_buffer.lookup_transform(
                 'map', 'base_link', rclpy.time.Time()
             )
-            robot_x = transform.transform.translation.x
-            robot_y = transform.transform.translation.y
+            return (
+                transform.transform.translation.x,
+                transform.transform.translation.y,
+            )
         except Exception:
-            robot_x = 0.0
-            robot_y = 0.0
+            return (0.0, 0.0)
 
-        dx = robot_x - target_pose.pose.position.x
-        dy = robot_y - target_pose.pose.position.y
-        dist = math.sqrt(dx*dx + dy*dy)
-
-        if dist > 0:
-            dx /= dist
-            dy /= dist
-        else:
-            dx = 1.0
-            dy = 0.0
-
-        goal_pose.pose.position.x = target_pose.pose.position.x + distance * dx
-        goal_pose.pose.position.y = target_pose.pose.position.y + distance * dy
-        goal_pose.pose.position.z = 0.0
-
-        yaw = math.atan2(
-            target_pose.pose.position.y - goal_pose.pose.position.y,
-            target_pose.pose.position.x - goal_pose.pose.position.x
-        )
-
-        goal_pose.pose.orientation.z = math.sin(yaw / 2.0)
-        goal_pose.pose.orientation.w = math.cos(yaw / 2.0)
-
-        return goal_pose
-    
     def nav2_goal_response_callback(self, future):
         """
         Nav2 goal response callback.
