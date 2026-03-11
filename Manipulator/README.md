@@ -1,24 +1,24 @@
-# Manipulator Control / MyCobot 280 Pi Control Package
+# MyCobot 280 Pi Manipulator Control Package
 
 **This package is still in development.**
-ROS2 control package used for MyCobot 280pi Manipulator. Supports RViz visualization, Gazebo simulation and real hardware control.
+ROS2 control package used for Elephant Robotics MyCobot 280pi Manipulator. Supports RViz visualization, Gazebo simulation and real hardware control.
 
 ## Features
 
-- 🤖 Supports MyCobot 280 Pi Manipulator (with Adaptive Gripper)
-- 📊 RViz visualization simulation
-- 🌍 Gazebo physics simulation (with and without gripper)
-- 🎮 Pick and Place demonstration
-- 🔄 Mock mode local testing (no hardware required)
-- 📡 ROS 2 distributed control (supports WiFi communication)
-- 🐍 Compatible with pymycobot API
+- Supports MyCobot 280 Pi Manipulator (with Adaptive Gripper)
+- RViz visualization simulation
+- Gazebo physics simulation (with and without gripper)
+- Pick and Place demonstration
+- Mock mode local testing (no hardware required)
+- ROS 2 distributed control (supports WiFi communication)
+- Compatible with pymycobot API
 
-## Package Structure
+## File Structure
 
 ```
-my_cobot_control    -- Manipulator Control Package and Calibration Tools
-mycobot_ros2        -- Official ROS 2 Package for myCobot Manipulator (URDF)
-mycobot280_pi       -- Gazebo Simulation Package (mltejas88/Project_Mycobot_280pi_simulation)
+scripts   -- Inculuding some calibration tools for arm and gripper 
+my_cobot_control    -- Manipulator Control Package (URDF, TF2, Controllers, Pick-and-Place Logic)
+mycobot280_pi       -- Gazebo Simulation Package (from mltejas88/Project_Mycobot_280pi_simulation)
 ```
 
 ## System Requirements
@@ -27,8 +27,8 @@ mycobot280_pi       -- Gazebo Simulation Package (mltejas88/Project_Mycobot_280p
 - **ROS 2**: Jazzy (or Humble)
 - **Python**: 3.12+
 - **Dependencies**:
-  - `pymycobot` (hardware control & inverse kinematics)
-  - `mycobot_ros2` (official URDF model and ROS 2 integration)
+  - `pymycobot` (hardware control & inverse kinematics from Elephant Robotics)
+  - `mycobot_ros2` (official URDF model and ROS 2 integration from Elephant Robotics)
   - `gazebo` / `gz-sim` (Gazebo simulation)
   - `ros-$ROS_DISTRO-gazebo-ros-pkgs` (Gazebo ROS bridge)
   - `ros-$ROS_DISTRO-joint-state-publisher`
@@ -60,9 +60,10 @@ git clone -b humble https://github.com/elephantrobotics/mycobot_ros2.git
 # Source: https://github.com/mltejas88/Project_Mycobot_280pi_simulation
 ```
 
-### 3. Build Workspace and Virtual Environment on 
+### 3. Build Workspace
 
 ```bash
+# (Optional) Create a Python virtual environment for pymycobot
 cd ~/mycobot_ws
 python3 -m venv venv_mycobot
 source venv_mycobot/bin/activate
@@ -75,7 +76,7 @@ pip install pymycobot
 # pip install ./pymycobot
 ```
 
-> **Note:** The virtual environment is required to avoid conflicts between `pymycobot` and ROS 2 Python dependencies. Always activate it before running scripts that use `pymycobot`.
+> **Note:** Sometimes the virtual environment is required to avoid conflicts between `pymycobot` and ROS 2 Python dependencies.
 
 ### 4. Build ROS 2 Packages
 
@@ -101,6 +102,8 @@ ros2 launch my_cobot_control pick_and_place_demo.launch.py
 This will:
 1. Launch RViz to display the MyCobot 280 model (with Adaptive Gripper)
 2. Loop pick and place presentation
+
+This part is abandoned for now, as we are focusing on Gazebo simulation and real hardware control. The RViz launch file is still available for testing the TF2 setup and joint state publishers without Gazebo or hardware.
 
 ---
 
@@ -148,7 +151,7 @@ killall -9 ruby gz
 
 ---
 
-# 3 Hardware Controller (Real Arm)
+# 3 Hardware Controller Test (Real Arm)
 
 ## 3.1 Architecture Overview
 
@@ -193,6 +196,14 @@ NUC                                           Pi (arm)
  │◄── sub /arm/status == "idle" ───────────────│  Done, ready for next block
 ```
 
+```
+TF2 Frame Hierarchy:
+camera_link
+  └── arm_base_link
+        └── joint6_flange
+              └── gripper_tip
+```
+
 ## 3.2 Run on Pi (Real Hardware)
 
 ### Deploy to Pi
@@ -213,13 +224,10 @@ source install/setup.bash
 ### Launch the arm controller
 ```bash
 # On Pi — start the controller (all nodes under /arm namespace)
-ros2 launch my_cobot_control arm_controller.launch.py
+ros2 launch my_cobot_control mycobot_with_tf2.launch.py use_mock:=false
 
 # With custom parameters
-ros2 launch my_cobot_control arm_controller.launch.py safe_z:=250.0 move_speed:=40
-
-# With RViz (requires display)
-ros2 launch my_cobot_control arm_controller.launch.py rviz:=true
+ros2 launch my_cobot_control mycobot_with_tf2.launch.py use_mock:=false safe_z:=250.0 move_speed:=40
 ```
 
 ### Or run the node directly (without launch file)
@@ -227,16 +235,24 @@ ros2 launch my_cobot_control arm_controller.launch.py rviz:=true
 ros2 run my_cobot_control mycobot_controller --ros-args -r __ns:=/arm
 ```
 
-## 3.3 Run on NUC (Mock Mode / Development)
+## 3.3 Run on Dev Machine (Mock Mode / Development)
 
 When no hardware is connected (no `/dev/ttyAMA0`), the controller automatically enters **MOCK mode** — all hardware calls are simulated with print outputs.
 
 ```bash
-# On NUC (dev machine)
+# On dev machine
 cd ~/mycobot_ws
 colcon build --packages-select my_cobot_control
 source install/setup.bash
-ros2 launch my_cobot_control arm_controller.launch.py
+
+# Development environment (default, launch joint control GUI)
+ros2 launch my_cobot_control mycobot_with_tf2.launch.py
+
+# Real environment (with out GUI)
+ros2 launch my_cobot_control mycobot_with_tf2.launch.py use_mock:=false
+
+# With RViz visualization (optional, requires TF2 setup)
+ros2 launch my_cobot_control mycobot_with_rviz.launch.py
 ```
 
 ## 3.4 Test Commands
@@ -318,16 +334,28 @@ ros2 topic list | grep arm
 #   /arm/target_place
 ```
 
+### Test 7: TF2 Transform Validation
+```bash
+# Check TF2 tree structure
+cd ~/mycobot_ws  #or cd ~/ros2_ws
+ros2 run tf2_tools view_frames
+evince frames.pdf
+
+# Run the TF2 transform test script (requires camera TF setup)
+cd ~/ros2_ws/scripts
+python3 scripts/test_tf2_transform.py
+
+# Visualize in RViz (optional, requires rviz launch)
+ros2 launch my_cobot_control mycobot_with_rviz.launch.py
+```
+
 ## 3.6 Standalone Calibration Test (No ROS 2)
 
 A standalone script is available for testing pick-and-place with calibrated coordinates directly on the Pi, **without ROS 2**:
 
 ```bash
-# SSH into Pi
-ssh elephant@10.3.14.59
-
 # Run directly with Python (requires pymycobot)
-cd ~/ros2_ws/src/my_cobot_control/my_cobot_control
+cd ~/ros2_ws/scripts
 python3 test_calibration_pick_place.py
 ```
 
@@ -339,7 +367,7 @@ Use the calibration tool to record new home/pickup/place positions by dragging t
 
 ```bash
 # On Pi
-cd ~/ros2_ws/src/my_cobot_control/my_cobot_control
+cd ~/ros2_ws/scripts
 python3 calibration_tool.py
 ```
 

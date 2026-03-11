@@ -4,9 +4,8 @@
 ROS2 control node for MyCobot 280 Pi with TF2 coordinate transforms.
 
 This version uses TF2 to handle all coordinate transformations:
-- Camera to arm base
-- Gripper offset compensation
-- Support for moving rover
+- Camera to arm base (both mounted on rover, relative position fixed)
+- Gripper offset compensation (from TF2 tree)
 
 Subscribes:
   - target_pick  (geometry_msgs/Point)  -- 3D pick coords in camera frame
@@ -17,9 +16,14 @@ Publishes:
   - joint_states   (sensor_msgs/JointState)
   - gripper_status (std_msgs/String)
 
-TF2 Frames Expected:
-  camera_link -> arm_base_link (or via rover_base)
-  joint6_flange -> gripper_base -> gripper_tip
+TF2 Frames (static transforms from launch file):
+  camera_link -> arm_base_link       (camera and arm both on rover)
+  joint6_flange -> gripper_base      (from URDF)
+  gripper_base -> gripper_tip        (gripper finger length)
+
+Note: If rover moves, navigation will provide map->rover_base transform,
+      and you can add rover_base->camera_link static transform.
+      This node will automatically use the full chain.
 """
 
 import os
@@ -43,7 +47,7 @@ import tf2_geometry_msgs
 
 
 # ---------------------------------------------------------------------------
-# State machine (same as before)
+# State machine
 # ---------------------------------------------------------------------------
 class ArmState(Enum):
     IDLE = auto()
@@ -155,7 +159,7 @@ class MyCobotControllerTF2(Node):
         self.declare_parameter('gripper_torque', 300)
         self.declare_parameter('grip_threshold', 25)
         self.declare_parameter('grip_check_retries', 2)
-        self.declare_parameter('home_angles', [0, 0, 0, 0, 0, 0])
+        self.declare_parameter('home_angles', [0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
         self.declare_parameter('calibration_file', '')
         
         # TF2 related parameters
@@ -165,7 +169,7 @@ class MyCobotControllerTF2(Node):
         self.declare_parameter('gripper_tip_frame', 'gripper_tip')
         self.declare_parameter('tf_timeout', 1.0)  # seconds
         self.declare_parameter('compensate_gripper_offset', True)
-        self.declare_parameter('gripper_offset_z', 80.0)  # mm, fallback if TF2 fails
+        self.declare_parameter('gripper_offset_z', 79.0)  # mm, fallback if TF2 fails
 
         self._safe_z = self.get_parameter('safe_z').value
         self._move_speed = self.get_parameter('move_speed').value
@@ -211,7 +215,7 @@ class MyCobotControllerTF2(Node):
         self.tf_listener = TransformListener(self.tf_buffer, self)
         
         # Give TF2 time to receive initial transforms
-        self.get_logger().info('Waiting for TF2 transforms to become available...')
+        self.get_logger().info('Waiting for TF2 transforms...')
         time.sleep(0.5)
 
         # ---- Hardware -------------------------------------------------------
@@ -253,14 +257,31 @@ class MyCobotControllerTF2(Node):
         self.create_timer(0.1, self._publish_joint_states)
 
         self._publish_status()
-        self.get_logger().info('MyCobot TF2 controller ready')
-        self.get_logger().info(f'  Camera frame    : {self._camera_frame}')
-        self.get_logger().info(f'  Arm base frame  : {self._arm_base_frame}')
-        self.get_logger().info(f'  Flange frame    : {self._flange_frame}')
+        
+        # Log startup info
+        self.get_logger().info('='*60)
+        self.get_logger().info('MyCobot TF2 Controller Ready')
+        self.get_logger().info('-'*60)
+        self.get_logger().info(f'  Camera frame     : {self._camera_frame}')
+        self.get_logger().info(f'  Arm base frame   : {self._arm_base_frame}')
+        self.get_logger().info(f'  Flange frame     : {self._flange_frame}')
         self.get_logger().info(f'  Gripper tip frame: {self._gripper_tip_frame}')
-        self.get_logger().info(f'  TF timeout      : {self._tf_timeout} s')
-        self.get_logger().info(f'  Gripper offset  : {"TF2" if self._compensate_gripper else "manual"} ({self._gripper_offset_z} mm)' )
-        self.get_logger().info('Waiting for target_pick ...')
+        self.get_logger().info(f'  TF timeout       : {self._tf_timeout} s')
+        
+        # Check and log TF2 transform status
+        self._log_tf_status()
+        
+        if self._compensate_gripper:
+            gripper_offset = self._get_gripper_offset_from_tf2()
+            if gripper_offset is not None:
+                self.get_logger().info(f'  Gripper offset   : {gripper_offset:.1f} mm (from TF2)')
+            else:
+                self.get_logger().info(f'  Gripper offset   : {self._gripper_offset_z:.1f} mm (fallback)')
+        else:
+            self.get_logger().info(f'  Gripper offset   : disabled')
+        
+        self.get_logger().info('='*60)
+        self.get_logger().info('Waiting for target_pick message...')
 
     # ======================================================================
     # Calibration
@@ -284,6 +305,29 @@ class MyCobotControllerTF2(Node):
     # ======================================================================
     # TF2 Transform Methods
     # ======================================================================
+    def _log_tf_status(self):
+        """Check and log TF2 transform availability."""
+        try:
+            # Check camera -> arm_base transform
+            transform = self.tf_buffer.lookup_transform(
+                target_frame=self._arm_base_frame,
+                source_frame=self._camera_frame,
+                time=rclpy.time.Time(),
+                timeout=Duration(seconds=0.5)
+            )
+            self.get_logger().info(f'  ✓ TF2: {self._camera_frame} -> {self._arm_base_frame} available')
+            
+            # Log the static offset
+            tx = transform.transform.translation.x * 1000
+            ty = transform.transform.translation.y * 1000
+            tz = transform.transform.translation.z * 1000
+            self.get_logger().info(f'    Offset: ({tx:.1f}, {ty:.1f}, {tz:.1f}) mm')
+            
+        except Exception as e:
+            self.get_logger().warn(f'  ✗ TF2: {self._camera_frame} -> {self._arm_base_frame} NOT available')
+            self.get_logger().warn(f'    Error: {e}')
+            self.get_logger().warn('    Make sure launch file is broadcasting static transforms!')
+
     def _transform_point_tf2(self, x_src, y_src, z_src, target_frame, source_frame):
         """
         Transform a point from source_frame to target_frame using TF2.
@@ -332,12 +376,15 @@ class MyCobotControllerTF2(Node):
 
     def _transform_camera_to_base(self, x_cam, y_cam, z_cam):
         """
-        Transform from camera frame to arm base frame.
+        Transform from camera frame to arm base frame, then compensate for gripper.
         
-        Returns coordinates suitable for send_coords (flange position).
-        If gripper compensation is enabled, subtracts gripper offset.
+        Args:
+            x_cam, y_cam, z_cam: Coordinates in camera frame (mm)
+            
+        Returns:
+            (x_flange, y_flange, z_flange): Flange coordinates for send_coords (mm)
         """
-        # First, transform to arm base
+        # Transform to arm base
         result = self._transform_point_tf2(
             x_cam, y_cam, z_cam,
             target_frame=self._arm_base_frame,
@@ -345,7 +392,7 @@ class MyCobotControllerTF2(Node):
         )
 
         if result is None:
-            self.get_logger().error('Using camera coords directly (TF2 failed)')
+            self.get_logger().error('TF2 failed, using camera coords directly!')
             return x_cam, y_cam, z_cam
 
         x_base, y_base, z_base = result
@@ -356,12 +403,12 @@ class MyCobotControllerTF2(Node):
             gripper_offset = self._get_gripper_offset_from_tf2()
             if gripper_offset is not None:
                 z_flange = z_base - gripper_offset
-                self.get_logger().info(
-                    f'  Gripper offset from TF2: {gripper_offset:.1f} mm')
+                self.get_logger().debug(
+                    f'  Gripper offset (TF2): {gripper_offset:.1f} mm')
             else:
                 # Fallback to configured offset
                 z_flange = z_base - self._gripper_offset_z
-                self.get_logger().info(
+                self.get_logger().debug(
                     f'  Gripper offset (config): {self._gripper_offset_z:.1f} mm')
         else:
             z_flange = z_base
@@ -371,7 +418,9 @@ class MyCobotControllerTF2(Node):
     def _get_gripper_offset_from_tf2(self):
         """
         Calculate gripper offset by querying TF2.
+        
         Returns Z offset from flange to gripper tip (in mm).
+        Returns None if transform is not available.
         """
         try:
             # Get transform from flange to gripper tip
@@ -417,10 +466,11 @@ class MyCobotControllerTF2(Node):
         if not self._validate_coords(target):
             return
 
-        self.get_logger().info(
-            f'[PICK] Camera coords: ({msg.x:.1f}, {msg.y:.1f}, {msg.z:.1f}) mm')
-        self.get_logger().info(
-            f'[PICK] Base/Flange:   ({x_base:.1f}, {y_base:.1f}, {z_base:.1f}) mm')
+        self.get_logger().info('-'*60)
+        self.get_logger().info('[PICK REQUEST]')
+        self.get_logger().info(f'  Camera coords: ({msg.x:.1f}, {msg.y:.1f}, {msg.z:.1f}) mm')
+        self.get_logger().info(f'  Flange coords: ({x_base:.1f}, {y_base:.1f}, {z_base:.1f}) mm')
+        self.get_logger().info('-'*60)
 
         self._task_thread = threading.Thread(
             target=self._run_pick, args=(target,), daemon=True)
@@ -449,10 +499,11 @@ class MyCobotControllerTF2(Node):
         if not self._validate_coords(target):
             return
 
-        self.get_logger().info(
-            f'[PLACE] Camera coords: ({msg.x:.1f}, {msg.y:.1f}, {msg.z:.1f}) mm')
-        self.get_logger().info(
-            f'[PLACE] Base/Flange:   ({x_base:.1f}, {y_base:.1f}, {z_base:.1f}) mm')
+        self.get_logger().info('-'*60)
+        self.get_logger().info('[PLACE REQUEST]')
+        self.get_logger().info(f'  Camera coords: ({msg.x:.1f}, {msg.y:.1f}, {msg.z:.1f}) mm')
+        self.get_logger().info(f'  Flange coords: ({x_base:.1f}, {y_base:.1f}, {z_base:.1f}) mm')
+        self.get_logger().info('-'*60)
 
         self._task_thread = threading.Thread(
             target=self._run_place, args=(target,), daemon=True)
@@ -471,7 +522,7 @@ class MyCobotControllerTF2(Node):
         return True
 
     # ======================================================================
-    # Hardware helpers (same as before)
+    # Hardware helpers (thread-safe wrappers)
     # ======================================================================
     def _hw_send_coords(self, coords, speed, mode):
         with self._hw_lock:
@@ -529,7 +580,7 @@ class MyCobotControllerTF2(Node):
     def _verify_grip(self):
         time.sleep(1.5)
         val = self._hw_get_gripper_value()
-        self.get_logger().info(f'Gripper value after close: {val}')
+        self.get_logger().info(f'  Gripper value: {val}')
         if val is None:
             self._publish_gripper('unknown')
             return False
@@ -570,12 +621,14 @@ class MyCobotControllerTF2(Node):
             self.get_logger().debug(f'Joint state read failed: {e}')
 
     def _make_coords(self, x, y, z):
+        """Create full coordinate list [x, y, z, rx, ry, rz] for send_coords."""
         return [x, y, z] + list(self._end_rpy)
 
     # ======================================================================
-    # PICK and PLACE phases (same as before, target is already transformed)
+    # PICK and PLACE phases
     # ======================================================================
     def _run_pick(self, target: Point):
+        """Execute pick sequence. Target is already transformed to base frame."""
         spd = self._move_speed
         g_spd = self._gripper_speed
 
@@ -586,32 +639,32 @@ class MyCobotControllerTF2(Node):
                 self._hw_clear_error()
 
             self._set_state(ArmState.MOVING_TO_PICK)
-            self.get_logger().info('[PICK 1/6] Open gripper')
+            self.get_logger().info('[1/6] Opening gripper')
             self._hw_set_gripper(0, g_spd)
             time.sleep(1.0)
 
             above_pick = self._make_coords(target.x, target.y, self._safe_z)
-            self.get_logger().info(f'[PICK 2/6] Move above pick: {above_pick}')
+            self.get_logger().info(f'[2/6] Moving above target')
             self._hw_send_coords(above_pick, spd, 0)
             self._wait_until_done()
             time.sleep(0.3)
 
             self._set_state(ArmState.DESCENDING_PICK)
             pick_coords = self._make_coords(target.x, target.y, target.z)
-            self.get_logger().info(f'[PICK 3/6] Descend to: {pick_coords}')
+            self.get_logger().info(f'[3/6] Descending to pick')
             self._hw_send_coords(pick_coords, spd, 1)
             self._wait_until_done()
             time.sleep(0.3)
 
             self._set_state(ArmState.GRIPPING)
-            self.get_logger().info('[PICK 4/6] Closing gripper')
+            self.get_logger().info('[4/6] Closing gripper')
             self._hw_set_gripper(1, g_spd)
 
             self._set_state(ArmState.GRIP_CHECK)
             grip_ok = False
             for attempt in range(1, self._grip_retries + 1):
                 self.get_logger().info(
-                    f'[PICK 5/6] Grip check {attempt}/{self._grip_retries}')
+                    f'[5/6] Grip check {attempt}/{self._grip_retries}')
                 if self._verify_grip():
                     grip_ok = True
                     break
@@ -629,7 +682,7 @@ class MyCobotControllerTF2(Node):
             self.get_logger().info('  Grip confirmed!')
 
             self._set_state(ArmState.LIFTING)
-            self.get_logger().info(f'[PICK 6/6] Lifting to z={self._safe_z}')
+            self.get_logger().info(f'[6/6] Lifting to safe height')
             self._hw_send_coords(above_pick, spd, 1)
             self._wait_until_done()
 
@@ -651,9 +704,10 @@ class MyCobotControllerTF2(Node):
             self._hw_focus_all()
             self._set_state(ArmState.HOLDING)
             self._publish_gripper('object_held')
-            self.get_logger().info('='*50)
-            self.get_logger().info('HOLDING -- block secured')
-            self.get_logger().info('='*50)
+            self.get_logger().info('='*60)
+            self.get_logger().info('✓ HOLDING -- Block secured, arm locked')
+            self.get_logger().info('  Rover can now move to find bin')
+            self.get_logger().info('='*60)
 
         except Exception as e:
             self.get_logger().error(f'Pick exception: {e}')
@@ -661,6 +715,7 @@ class MyCobotControllerTF2(Node):
             self._cleanup_pick()
 
     def _cleanup_pick(self):
+        """Safety cleanup after pick failure."""
         try:
             self._hw_set_gripper(0, self._gripper_speed)
             time.sleep(1.0)
@@ -674,6 +729,7 @@ class MyCobotControllerTF2(Node):
         self._set_state(ArmState.IDLE)
 
     def _run_place(self, target: Point):
+        """Execute place sequence. Target is already transformed to base frame."""
         spd = self._move_speed
         g_spd = self._gripper_speed
 
@@ -685,13 +741,13 @@ class MyCobotControllerTF2(Node):
 
             self._set_state(ArmState.MOVING_TO_PLACE)
             above_bin = self._make_coords(target.x, target.y, self._safe_z)
-            self.get_logger().info(f'[PLACE 1/3] Moving above bin: {above_bin}')
+            self.get_logger().info(f'[1/3] Moving above bin')
             self._hw_send_coords(above_bin, spd, 0)
             self._wait_until_done()
             time.sleep(0.3)
 
             val = self._hw_get_gripper_value()
-            self.get_logger().info(f'  Grip before release: {val}')
+            self.get_logger().info(f'  Grip status: {val}')
             if val is not None and val <= self._grip_threshold:
                 self.get_logger().error('Object lost during move to bin!')
                 self._publish_gripper('object_dropped')
@@ -700,20 +756,20 @@ class MyCobotControllerTF2(Node):
                 return
 
             self._set_state(ArmState.RELEASING)
-            self.get_logger().info('[PLACE 2/3] Releasing block into bin')
+            self.get_logger().info('[2/3] Releasing block into bin')
             self._hw_set_gripper(0, g_spd)
             time.sleep(1.5)
             self._publish_gripper('released')
 
             self._set_state(ArmState.RETURNING_HOME)
-            self.get_logger().info('[PLACE 3/3] Returning home')
+            self.get_logger().info('[3/3] Returning home')
             self._hw_send_angles(self._home_angles, spd)
             self._wait_until_done()
 
             self._set_state(ArmState.IDLE)
-            self.get_logger().info('='*50)
-            self.get_logger().info('PLACE complete -- ready for next pick')
-            self.get_logger().info('='*50)
+            self.get_logger().info('='*60)
+            self.get_logger().info('✓ PLACE complete -- Ready for next pick')
+            self.get_logger().info('='*60)
 
         except Exception as e:
             self.get_logger().error(f'Place exception: {e}')
@@ -721,6 +777,7 @@ class MyCobotControllerTF2(Node):
             self._cleanup_place()
 
     def _cleanup_place(self):
+        """Safety cleanup after place failure."""
         try:
             self._hw_set_gripper(0, self._gripper_speed)
             time.sleep(1.0)
