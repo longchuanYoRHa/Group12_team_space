@@ -4,7 +4,7 @@
 
 ```mermaid
 gantt
-    title AERO62520 Group 12 - Coursework Schedule
+    title AERO62520 Group 12 - Semester 1 Coursework Schedule
     dateFormat  YYYY-MM-DD
     axisFormat  %b %d
     excludes    weekends
@@ -28,6 +28,33 @@ gantt
     section CW5 - Technical Competency Assessment
     Technical Assessment   : crit, cw5, 2025-11-14, 23d
     CW5 Submission        : milestone, cw5_due, 2025-12-17, 0d
+```
+
+```mermaid
+gantt
+    title AERO62520 Group 12 - Semester 2 Coursework Schedule
+    dateFormat  YYYY-MM-DD
+    axisFormat  %b %d
+
+    section CW6 - Final Design Review
+    FDR section allocation   :crit, cw6, 2026-3-11, 1d
+    system integration coding   : cw6, 2026-3-09, 8d
+    Github Repository arrangement   :cw6, 2026-3-09, 10d
+    CW6 Submission        :milestone, cw6_due, 2026-3-20, 0d
+
+    section CW7 - Technical Evaluation Video
+    full system integration tests     :cw7, 2026-3-17, 50d
+    video editing   :cw7, 2026-5-01, 8d
+    CW7 Submission        :milestone, cw7_due, 2026-05-08, 0d
+
+    section CW8 - Technical Demonstration
+    Final robust check based on Requirements Verification Matrix  :crit, cw8, 2026-4-1, 14d
+    CW8 Demonstration        :milestone, cw8_due, 2026-05-08, 0d
+
+    section CW9 - Final CPD Portfolio
+    Final CPD Portfolio     : crit, cw9, 2026-5-8, 7d
+    CW9 Submission        : milestone, cw9_due, 2026-05-15, 0d
+
 ```
 
 ## General goal of the project
@@ -54,19 +81,21 @@ Using the given Leo Rover and the myCobot 280pi robotic arm, build a rover that 
 
 **Robot arm test**:
 
-- trying to connect to the nuc (by either hotspot or ethernet), try bypassing the need of inserting password for arm to connect to the nuc every power on.
-- test on controlling gripper to grab and release the object.
+- ~~trying to connect to the nuc (by either hotspot or ethernet), try bypassing the need of inserting password for arm to connect to the nuc every power on.~~
+- ~~test on controlling gripper to grab and release the object.~~
+
+
 
 **Chassis navigation test**:
 
-- setup the Nav2 and slam_toolbox on nuc and able to run tb3 demo.
-- find and tested auto exploration algorithm to navigate the rover through the environment and map the environment.
-- able to connect chassis to the nuc hotspot and able to see rover topics on nuc and check the rover's state in rviz.
+- ~~setup the Nav2 and slam_toolbox on nuc and able to run tb3 demo.~~
+- ~~find and tested auto exploration algorithm to navigate the rover through the environment and map the environment.~~
+- ~~able to connect chassis to the nuc hotspot and able to see rover topics on nuc and check the rover's state in rviz.~~
 
 **Vision system test**:
 
-- tried YOLOv8 on NUC (without NVIDIA GPU) to detect the object and the colour of the object at 60fps.
+- ~~tried YOLOv8 on NUC (without NVIDIA GPU) to detect the object and the colour of the object at 60fps.~~
 
 **Mechanical design**:
 
-- finished designing the first version of the chassis modification to connect the other components to the chassis.
+- ~~finished designing the first version of the chassis modification to connect the other components to the chassis.~~
