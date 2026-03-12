@@ -11,10 +11,14 @@ This node is the core scheduler of the system, responsible for:
 5. Managing state transitions and error recovery
 """
 
+import os
+import sys
+import subprocess
 import rclpy
 from rclpy.node import Node
 from rclpy.action import ActionClient
 from rclpy.qos import qos_profile_sensor_data, ReliabilityPolicy
+from action_msgs.msg import GoalStatus
 import tf2_ros
 import tf2_geometry_msgs
 import geometry_msgs.msg as geometry_msgs
@@ -26,6 +30,11 @@ import time
 from real_Nav_test.task_manager_utils import (
     is_pose_in_blacklist as check_pose_in_blacklist,
     compute_pregrasp_pose,
+)
+from real_Nav_test.detect_objects_in_pgm_map import (
+    get_interest_points_from_pgm,
+    DEFAULT_RESOLUTION,
+    DEFAULT_ORIGIN,
 )
 
 
@@ -56,6 +65,11 @@ class TaskState(Enum):
     PRECISION_ALIGN_BIN = "precision_align_bin"  # Precision align to bin (optional)
     PLACE_IN_BIN = "place_in_bin"          # Place: put object into bin
     POST_ACTION = "post_action"            # Post action: handling after task completion
+    # Fallback when exploration finished but vision missed targets or not all 3 groups
+    EXPLORE_FINISHED_FALLBACK = "explore_finished_fallback"
+    RUN_MAP_DETECTION = "run_map_detection"  # Run PGM detection, filter, queue interest points
+    NAV_TO_INTEREST_POINT = "nav_to_interest_point"  # Navigate to next interest point (approach)
+    WAIT_AT_INTEREST_POINT = "wait_at_interest_point"  # 15s timer; if no vision detection -> fail
 
 
 class TaskManagerNode(Node):
@@ -89,7 +103,22 @@ class TaskManagerNode(Node):
 
         # ========== Failed object blacklist ==========
         self.object_blacklist = []
+        self.bin_blacklist = []  # Bins already placed at (to filter in fallback)
         self.blacklist_radius = 0.3
+
+        # ========== Explore-finished fallback: vision tracking ==========
+        self.detected_object_colors = set()   # {'red','green','blue'} ever seen for pick
+        self.detected_bin_colors = set()      # for place
+        self.explore_finished_received = False
+
+        # ========== Fallback: save map + PGM detection ==========
+        self._map_fallback_round_count = 0   # Count: run save -> next state -> file not found -> back to fallback
+        self._map_fallback_max_rounds = 15    # After this many rounds, terminate
+        self.interest_points = []             # List of (x, y) in map frame
+        self.interest_point_index = 0
+        self.current_interest_point = None   # (x, y) for blacklist on timeout
+        self.wait_at_point_start_time = None
+        self.wait_at_point_duration_sec = 15.0
 
         # ========== Action clients ==========
         self.nav2_client = ActionClient(self, nav2_msgs.NavigateToPose, 'navigate_to_pose')
@@ -105,14 +134,23 @@ class TaskManagerNode(Node):
         self.cargo_state_pub = self.create_publisher(std_msgs.String, 'task_manager/cargo_state', 10)
 
         # ========== Subscribers (aligned with rover_vision_node) ==========
-        for topic in ['/target_pick/red', '/target_pick/green', '/target_pick/blue']:
+        for color, topic in [('red', '/target_pick/red'), ('green', '/target_pick/green'), ('blue', '/target_pick/blue')]:
             self.create_subscription(
-                geometry_msgs.Point, topic, self.object_point_callback, qos_profile_sensor_data
+                geometry_msgs.Point, topic,
+                lambda msg, c=color: self._object_point_callback(msg, c),
+                qos_profile_sensor_data,
             )
-        for topic in ['/target_place/red', '/target_place/green', '/target_place/blue']:
+        for color, topic in [('red', '/target_place/red'), ('green', '/target_place/green'), ('blue', '/target_place/blue')]:
             self.create_subscription(
-                geometry_msgs.Point, topic, self.bin_point_callback, qos_profile_sensor_data
+                geometry_msgs.Point, topic,
+                lambda msg, c=color: self._bin_point_callback(msg, c),
+                qos_profile_sensor_data,
             )
+
+        # ========== Explore finished (from explore node) ==========
+        self.create_subscription(
+            std_msgs.Bool, 'explore/finished', self._explore_finished_callback, 10
+        )
 
         # ========== TF ==========
         self.tf_buffer = tf2_ros.Buffer()
@@ -125,6 +163,12 @@ class TaskManagerNode(Node):
         self.declare_parameter('pregrasp_distance', 0.5)
         self.declare_parameter('preplace_distance', 0.6)
         self.declare_parameter('camera_frame_id', 'camera_depth_optical_frame')
+        self.declare_parameter('maps_directory', '')
+        self.declare_parameter('map_save_basename', 'explore_complete')  # e.g. "my_map" for -f my_map
+        self.declare_parameter('map_resolution', DEFAULT_RESOLUTION)
+        self.declare_parameter('map_origin_x', DEFAULT_ORIGIN[0])
+        self.declare_parameter('map_origin_y', DEFAULT_ORIGIN[1])
+        self.declare_parameter('wait_at_interest_point_sec', 15.0)
 
         self.get_logger().info('Task manager node initialized')
     def _point_to_pose_stamped_in_map(self, point_msg):
@@ -155,9 +199,13 @@ class TaskManagerNode(Node):
             pose_stamped.pose.orientation.w = 1.0
             return pose_stamped
 
-    def object_point_callback(self, msg):
-        """Object (pick) detection; /target_pick/red, green, blue -> geometry_msgs.Point."""
-        if self.cargo_state != CargoState.EMPTY or self.current_state != TaskState.EXPLORE:
+    def _object_point_callback(self, msg, color: str):
+        """Object (pick) detection; records color and forwards to common logic."""
+        self.detected_object_colors.add(color)
+        if self.cargo_state != CargoState.EMPTY:
+            self.object_detection_count = 0
+            return
+        if self.current_state not in (TaskState.EXPLORE, TaskState.WAIT_AT_INTEREST_POINT):
             self.object_detection_count = 0
             return
         try:
@@ -168,19 +216,22 @@ class TaskManagerNode(Node):
             self.object_detection_count += 1
             if self.object_detection_count >= self.required_detection_frames:
                 self.get_logger().info('Object found and confirmed!')
-                self.current_state = TaskState.OBJECT_FOUND
                 self.object_detection_count = 0
+                self.current_state = TaskState.OBJECT_FOUND
         except Exception as e:
             self.get_logger().error(f'Error processing target_pick message: {e}')
             self.object_detection_count = 0
 
-    def bin_point_callback(self, msg):
-        """Bin (place) detection; /target_place/red, green, blue -> geometry_msgs.Point."""
+    def _bin_point_callback(self, msg, color: str):
+        """Bin (place) detection; records color, filters bin_blacklist."""
+        self.detected_bin_colors.add(color)
         if self.cargo_state != CargoState.HAS_OBJECT or self.current_state != TaskState.RESUME_EXPLORE_FOR_BIN:
             self.bin_detection_count = 0
             return
         try:
             pose_stamped = self._point_to_pose_stamped_in_map(msg)
+            if check_pose_in_blacklist(pose_stamped.pose.position, self.bin_blacklist, self.blacklist_radius):
+                return
             self.bin_pose = pose_stamped
             self.bin_detection_count += 1
             if self.bin_detection_count >= self.required_detection_frames:
@@ -190,6 +241,24 @@ class TaskManagerNode(Node):
         except Exception as e:
             self.get_logger().error(f'Error processing target_place message: {e}')
             self.bin_detection_count = 0
+
+    def _explore_finished_callback(self, msg):
+        """When exploration finishes: if vision missed targets or not all 3 groups -> start fallback."""
+        if not msg.data:
+            return
+        self.explore_finished_received = True
+        if self.current_state != TaskState.EXPLORE:
+            return
+        need_fallback = (
+            len(self.detected_object_colors) == 0
+            or len(self.detected_object_colors) < 3
+        )
+        if need_fallback:
+            self.get_logger().info(
+                'Exploration finished but vision missed targets or not all 3 groups; starting map fallback.'
+            )
+            self._publish_explore_resume_if_changed(False)
+            self.current_state = TaskState.EXPLORE_FINISHED_FALLBACK
 
     def state_machine_callback(self):
         """
@@ -236,6 +305,15 @@ class TaskManagerNode(Node):
             self.handle_place_in_bin_state()
         elif self.current_state == TaskState.POST_ACTION:
             self.handle_post_action_state()
+        elif self.current_state == TaskState.EXPLORE_FINISHED_FALLBACK:
+            self.handle_explore_finished_fallback_state()
+        elif self.current_state == TaskState.RUN_MAP_DETECTION:
+            self.handle_run_map_detection_state()
+        elif self.current_state == TaskState.NAV_TO_INTEREST_POINT:
+            self.handle_nav_to_interest_point_state()
+        elif self.current_state == TaskState.WAIT_AT_INTEREST_POINT:
+            self.handle_wait_at_interest_point_state()
+        #TODO: 
     
     def handle_init_state(self):
         """
@@ -321,7 +399,6 @@ class TaskManagerNode(Node):
             send_goal_future = self.nav2_client.send_goal_async(goal_msg)
             send_goal_future.add_done_callback(self.nav2_goal_response_callback)
         else:
-            from rclpy.action import GoalStatus
             status = self.nav2_goal_handle.status
             if status == GoalStatus.STATUS_SUCCEEDED:
                 self.get_logger().info('Reached pregrasp pose')
@@ -407,7 +484,6 @@ class TaskManagerNode(Node):
             send_goal_future = self.nav2_client.send_goal_async(goal_msg)
             send_goal_future.add_done_callback(self.nav2_goal_response_callback)
         else:
-            from rclpy.action import GoalStatus
             status = self.nav2_goal_handle.status
             if status == GoalStatus.STATUS_SUCCEEDED:
                 self.get_logger().info('Reached preplace pose')
@@ -441,6 +517,8 @@ class TaskManagerNode(Node):
 
         if place_success:
             self.get_logger().info('Place succeeded!')
+            if self.bin_pose is not None:
+                self.bin_blacklist.append(self.bin_pose.pose.position)
             self.cargo_state = CargoState.EMPTY
             self.place_retry_count = 0
             self.adjust_nav2_for_carry_mode(False)
@@ -463,7 +541,169 @@ class TaskManagerNode(Node):
         """
         self.get_logger().info('Post action: returning to explore')
         self.current_state = TaskState.EXPLORE
-    
+
+    def _get_maps_directory(self):
+        """Resolve writable maps directory for saving map."""
+        maps_dir = self.get_parameter('maps_directory').value
+        if maps_dir:
+            return maps_dir
+        try:
+            from ament_index_python.packages import get_package_share_directory
+            pkg_share = get_package_share_directory('real_Nav_test')
+            return os.path.join(pkg_share, 'maps')
+        except Exception:
+            return os.path.expanduser('~/maps')
+
+    def handle_explore_finished_fallback_state(self):
+        """
+        Run map_saver_cli once, then go directly to RUN_MAP_DETECTION.
+        If RUN_MAP_DETECTION finds no file at the expected path, it will return here;
+        after 15 such rounds, the process terminates.
+        """
+        maps_dir = self._get_maps_directory()
+        os.makedirs(maps_dir, exist_ok=True)
+        basename = self.get_parameter('map_save_basename').value
+        map_base = os.path.join(maps_dir, basename)
+        self.get_logger().info(
+            f'Map save round {self._map_fallback_round_count + 1}/{self._map_fallback_max_rounds}: '
+            f'ros2 run nav2_map_server map_saver_cli -f {map_base}'
+        )
+        try:
+            proc = subprocess.run(
+                ['ros2', 'run', 'nav2_map_server', 'map_saver_cli', '-f', map_base],
+                capture_output=True,
+                timeout=15,
+                text=True,
+            )
+            if proc.returncode != 0:
+                self.get_logger().warn(
+                    f'map_saver_cli returncode={proc.returncode}; stderr: {proc.stderr.strip() or "(none)"}'
+                )
+        except subprocess.TimeoutExpired:
+            self.get_logger().warn('map_saver_cli timed out after 15s.')
+        except FileNotFoundError:
+            self.get_logger().error('ros2 or map_saver_cli not found in PATH.')
+        except Exception as e:
+            self.get_logger().warn(f'map_saver_cli error: {e}')
+        # Always go to next state; RUN_MAP_DETECTION will check file and possibly return here
+        self.current_state = TaskState.RUN_MAP_DETECTION
+
+    def handle_run_map_detection_state(self):
+        """Run PGM detection on saved map; if file not found, go back to fallback; after 15 rounds, terminate."""
+        maps_dir = self._get_maps_directory()
+        basename = self.get_parameter('map_save_basename').value
+        pgm_path = os.path.join(maps_dir, basename + '.pgm')
+        if not os.path.isfile(pgm_path):
+            self._map_fallback_round_count += 1
+            self.get_logger().warn(
+                f'PGM not found at {pgm_path}; round {self._map_fallback_round_count}/{self._map_fallback_max_rounds}, '
+                'returning to fallback to retry save.'
+            )
+            if self._map_fallback_round_count >= self._map_fallback_max_rounds:
+                self.get_logger().error(
+                    f'Map file still not found after {self._map_fallback_max_rounds} rounds. Exiting process with failure.'
+                )
+                rclpy.shutdown()
+                sys.exit(1)
+            self.current_state = TaskState.EXPLORE_FINISHED_FALLBACK
+            return
+        self._map_fallback_round_count = 0  # Reset on success
+        resolution = self.get_parameter('map_resolution').value
+        origin = (
+            self.get_parameter('map_origin_x').value,
+            self.get_parameter('map_origin_y').value,
+        )
+        try:
+            raw_points = get_interest_points_from_pgm(
+                pgm_path,
+                resolution=resolution,
+                origin=origin,
+            )
+        except Exception as e:
+            self.get_logger().error(f'PGM detection failed: {e}; returning to EXPLORE.')
+            self.current_state = TaskState.EXPLORE
+            return
+        filtered = []
+        for (mx, my) in raw_points:
+            p = geometry_msgs.Point()
+            p.x = mx
+            p.y = my
+            p.z = 0.0
+            if check_pose_in_blacklist(p, self.object_blacklist, self.blacklist_radius):
+                continue
+            if check_pose_in_blacklist(p, self.bin_blacklist, self.blacklist_radius):
+                continue
+            filtered.append((mx, my))
+        self.interest_points = filtered
+        self.interest_point_index = 0
+        self.get_logger().info(f'Map detection: {len(raw_points)} points, {len(filtered)} after filtering.')
+        if not self.interest_points:
+            self.get_logger().info('No interest points left; returning to EXPLORE.')
+            self.current_state = TaskState.EXPLORE
+            return
+        self.current_state = TaskState.NAV_TO_INTEREST_POINT
+
+    def handle_nav_to_interest_point_state(self):
+        """Navigate to next interest point (approach pose); on arrival start 15s wait."""
+        if self.interest_point_index >= len(self.interest_points):
+            self.get_logger().info('All interest points visited; returning to EXPLORE.')
+            self.current_state = TaskState.EXPLORE
+            return
+        mx, my = self.interest_points[self.interest_point_index]
+        self.current_interest_point = (mx, my)
+        target_pose = geometry_msgs.PoseStamped()
+        target_pose.header.frame_id = 'map'
+        target_pose.header.stamp = self.get_clock().now().to_msg()
+        target_pose.pose.position.x = mx
+        target_pose.pose.position.y = my
+        target_pose.pose.position.z = 0.0
+        target_pose.pose.orientation.w = 1.0
+        robot_x, robot_y = self._get_robot_xy_in_map()
+        pregrasp_distance = self.get_parameter('pregrasp_distance').value
+        goal_pose = compute_pregrasp_pose(
+            target_pose, pregrasp_distance, robot_x, robot_y,
+            frame_id='map', stamp=self.get_clock().now().to_msg(),
+        )
+        goal_msg = nav2_msgs.NavigateToPose.Goal()
+        goal_msg.pose = goal_pose
+        if self.nav2_goal_handle is None:
+            self.get_logger().info(
+                f'Nav to interest point {self.interest_point_index + 1}/{len(self.interest_points)} at ({mx:.2f}, {my:.2f})'
+            )
+            send_goal_future = self.nav2_client.send_goal_async(goal_msg)
+            send_goal_future.add_done_callback(self.nav2_goal_response_callback)
+        else:
+            status = self.nav2_goal_handle.status
+            if status == GoalStatus.STATUS_SUCCEEDED:
+                self.get_logger().info('Reached interest point; starting 15s wait for vision.')
+                self.nav2_goal_handle = None
+                self.wait_at_point_start_time = time.monotonic()
+                self.current_state = TaskState.WAIT_AT_INTEREST_POINT
+            elif status in [GoalStatus.STATUS_CANCELED, GoalStatus.STATUS_ABORTED]:
+                self.get_logger().warn('Nav to interest point failed; skipping to next.')
+                self.nav2_goal_handle = None
+                self.interest_point_index += 1
+                self.current_interest_point = None
+
+    def handle_wait_at_interest_point_state(self):
+        """15s at current interest point; if no vision detection by then, mark as failed and next."""
+        duration = self.get_parameter('wait_at_interest_point_sec').value
+        if self.wait_at_point_start_time is None:
+            self.wait_at_point_start_time = time.monotonic()
+        elapsed = time.monotonic() - self.wait_at_point_start_time
+        if elapsed >= duration:
+            if self.current_interest_point is not None:
+                p = geometry_msgs.Point()
+                p.x = self.current_interest_point[0]
+                p.y = self.current_interest_point[1]
+                p.z = 0.0
+                self.object_blacklist.append(p)
+                self.get_logger().info('No vision detection at interest point within 15s; marked as failed target.')
+            self.interest_point_index += 1
+            self.current_interest_point = None
+            self.wait_at_point_start_time = None
+            self.current_state = TaskState.NAV_TO_INTEREST_POINT
+
     def _get_robot_xy_in_map(self):
         """Get base_link (x, y) in map from TF; return (0.0, 0.0) on failure."""
         try:
@@ -507,7 +747,6 @@ class TaskManagerNode(Node):
         Args:
             future: Future containing the goal handle
         """
-        from rclpy.action import GoalStatus
         goal_handle = future.result()
         if goal_handle.status == GoalStatus.STATUS_SUCCEEDED:
             self.get_logger().info('Nav2 goal succeeded')

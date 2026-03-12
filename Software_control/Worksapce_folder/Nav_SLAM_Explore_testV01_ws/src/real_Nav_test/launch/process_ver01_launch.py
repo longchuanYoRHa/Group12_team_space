@@ -153,15 +153,15 @@ def generate_launch_description():
     # Wait for SLAM to be configured before activating
     wait_for_slam_configured_cmd = ExecuteProcess(
         cmd=['bash', '-c',
-             'timeout=10; elapsed=0; '
-             'until ros2 lifecycle get /slam_toolbox | grep -q "active\|inactive"; do '
+             r'timeout=10; elapsed=0; '
+             r'until ros2 lifecycle get /slam_toolbox | grep -q "active\|inactive"; do '
              '  echo "Waiting for SLAM to be configured... ($elapsed/$timeout seconds)"; '
              '  sleep 0.5; elapsed=$((elapsed+1)); '
-             '  if [ $elapsed -ge $timeout ]; then '
-             '    echo "ERROR: SLAM configuration timeout"; exit 1; '
-             '  fi; '
-             'done; '
-             'echo "SLAM is configured"'],
+             r'  if [ $elapsed -ge $timeout ]; then '
+             r'    echo "ERROR: SLAM configuration timeout"; exit 1; '
+             r'  fi; '
+             r'done; '
+             r'echo "SLAM is configured"'],
         output='screen'
     )
 
@@ -217,27 +217,25 @@ def generate_launch_description():
         name='task_manager',
         output='screen',
         parameters=[{
-            'pregrasp_distance': 0.5,  # meters
-            'preplace_distance': 0.6,  # meters
-            'stow_pose_x': 0.3,
-            'stow_pose_y': 0.0,
-            'stow_pose_z': 0.2,
+            'pregrasp_distance': 0.5,
+            'preplace_distance': 0.6,
+            'camera_frame_id': 'camera_depth_optical_frame',
         }]
     )
 
     # Launch rviz with custom config
-    rviz_config_file = PathJoinSubstitution(
-        [real_nav_test_pkg_dir, 'rviz', 'nav2_default_view.rviz']
-    )
-    rviz_launch = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            PathJoinSubstitution([nav2_bringup_dir, 'launch', 'rviz_launch.py'])
-        ),
-        launch_arguments={
-            'use_sim_time': use_sim_time,
-            'rviz_config_file': rviz_config_file,
-        }.items()
-    )
+    # rviz_config_file = PathJoinSubstitution(
+    #     [real_nav_test_pkg_dir, 'rviz', 'nav2_default_view.rviz']
+    # )
+    # rviz_launch = IncludeLaunchDescription(
+    #     PythonLaunchDescriptionSource(
+    #         PathJoinSubstitution([nav2_bringup_dir, 'launch', 'rviz_launch.py'])
+    #     ),
+    #     launch_arguments={
+    #         'use_sim_time': use_sim_time,
+    #         'rviz_config_file': rviz_config_file,
+    #     }.items()
+    # )
 
     
     # 1. Wait for /scan topic available, then start static transform and laser filter
@@ -255,7 +253,7 @@ def generate_launch_description():
         OnProcessExit(
             target_action=wait_for_scan_cmd,
             on_exit=[
-                static_tf_after_scan,
+                static_tf_after_scan,static_tf_base_to_camera,
                 laser_filter_after_scan,
             ]
         )
@@ -353,13 +351,6 @@ def generate_launch_description():
         period=0.1,  # short delay
         actions=[explore_launch]
     )
-    
-    wait_for_nav_action_handler = RegisterEventHandler(
-        OnProcessExit(
-            target_action=wait_for_nav_action_cmd,
-            on_exit=[explore_after_nav_action]
-        )
-    )
 
     # 11. After explore starts, start task manager and rviz
     # Note: explore_launch is IncludeLaunchDescription, will not trigger OnProcessExit
@@ -368,18 +359,14 @@ def generate_launch_description():
         period=3.0,  # give explore time to start
         actions=[task_manager_node]
     )
-    
-    rviz_after_nav_action = TimerAction(
-        period=3.0,
-        actions=[rviz_launch]
-    )
-    
+
+    # After navigate_to_pose action available, start explore and task manager
     explore_handler = RegisterEventHandler(
         OnProcessExit(
-            target_action=wait_for_nav_action_cmd,  # after nav action available, delay start task manager and rviz
+            target_action=wait_for_nav_action_cmd,
             on_exit=[
+                explore_after_nav_action,
                 task_manager_after_nav_action,
-                rviz_after_nav_action,
             ]
         )
     )
@@ -425,6 +412,5 @@ def generate_launch_description():
         activate_slam_handler,       # after activating, wait for /map
         wait_for_map_handler,        # after /map available, start Nav2
         nav2_handler,                # after /map available, delay wait for navigate_to_pose action
-        wait_for_nav_action_handler, # after navigate_to_pose action available, start explore
-        # explore_handler,              # after action available, delay start task manager and rviz
+        explore_handler,              # after action available, start explore + task manager
     ])
