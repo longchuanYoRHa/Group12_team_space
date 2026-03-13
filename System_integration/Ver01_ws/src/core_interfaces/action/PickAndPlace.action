@@ -1,0 +1,17 @@
+# PickAndPlace.action  
+
+# Goal  
+string color                      # Target block color  
+geometry_msgs/Point pick_position # Pick-up position (base_link frame, m)  
+geometry_msgs/Point place_position # Place position (base_link frame, m)  
+---  
+# Result  
+bool success  
+string color  
+string message  
+float64 duration       # Operation duration (seconds)  
+---  
+# Feedback  
+string phase           # Current phase  
+float32 progress       # Progress [0.0, 1.0]  
+string message  
