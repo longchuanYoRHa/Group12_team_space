@@ -159,12 +159,12 @@ class MyCobotControllerTF2(Node):
         self.declare_parameter('gripper_torque', 300)
         self.declare_parameter('grip_threshold', 25)
         self.declare_parameter('grip_check_retries', 2)
-        self.declare_parameter('home_angles', [0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+        self.declare_parameter('home_angles', [0.0, 0.0, 0.0, 0.0, 0.0, -45.0])
         self.declare_parameter('calibration_file', '')
         
         # TF2 related parameters
         self.declare_parameter('camera_frame', 'camera_link')
-        self.declare_parameter('arm_base_frame', 'arm_base_link')
+        self.declare_parameter('arm_base_frame', 'g_base')  # TF2 name match URDF and launch
         self.declare_parameter('flange_frame', 'joint6_flange')
         self.declare_parameter('gripper_tip_frame', 'gripper_tip')
         self.declare_parameter('tf_timeout', 1.0)  # seconds
@@ -212,7 +212,7 @@ class MyCobotControllerTF2(Node):
 
         # ---- TF2 setup ------------------------------------------------------
         self.tf_buffer = Buffer()
-        self.tf_listener = TransformListener(self.tf_buffer, self)
+        self.tf_listener = TransformListener(self.tf_buffer, self, spin_thread=True)
         
         # Give TF2 time to receive initial transforms
         self.get_logger().info('Waiting for TF2 transforms...')
@@ -308,12 +308,20 @@ class MyCobotControllerTF2(Node):
     def _log_tf_status(self):
         """Check and log TF2 transform availability."""
         try:
+            if not self.tf_buffer.can_transform(
+                target_frame=self._arm_base_frame,
+                source_frame=self._camera_frame,
+                time=rclpy.time.Time(),
+                timeout=Duration(seconds=self._tf_timeout)
+            ):
+                raise RuntimeError('Transform not yet available in TF buffer')
+
             # Check camera -> arm_base transform
             transform = self.tf_buffer.lookup_transform(
                 target_frame=self._arm_base_frame,
                 source_frame=self._camera_frame,
                 time=rclpy.time.Time(),
-                timeout=Duration(seconds=0.5)
+                timeout=Duration(seconds=self._tf_timeout)
             )
             self.get_logger().info(f'  ✓ TF2: {self._camera_frame} -> {self._arm_base_frame} available')
             
