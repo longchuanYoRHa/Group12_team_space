@@ -32,7 +32,8 @@ setup(
     },
     entry_points={
         'console_scripts': [
-            'task_manager = central_controller.task_manager:main'
+            'task_manager = central_controller.task_manager:main',
+            'mock_arm_node = central_controller.mock_arm_node:main'
         ],
     },
 )
