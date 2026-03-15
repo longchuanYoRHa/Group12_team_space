@@ -34,22 +34,24 @@
     <origin xyz="0.1758 0.0 -0.10553" rpy="3.14159 0 3.14159"/>
   </joint>
 
-  <!-- D435i camera configuration (simplified version: only color and depth, no IMU) -->
+  <!-- ========== 相机仿真相关代码已注释 ========== -->
+  <!--
+  D435i camera configuration (simplified version: only color and depth, no IMU)
   <xacro:property name="M_PI" value="3.1415926535897931"/>
   <xacro:property name="deg_to_rad" value="0.01745329251994329577"/>
-  
-  <!-- camera parameters (consistent with the original configuration) -->
+
+  camera parameters (consistent with the original configuration)
   <xacro:property name="color_width" value="1920"/>
   <xacro:property name="color_height" value="1080"/>
   <xacro:property name="color_fps" value="30"/>
   <xacro:property name="color_fov" value="69.4"/>
-  
+
   <xacro:property name="depth_width" value="1280"/>
   <xacro:property name="depth_height" value="720"/>
   <xacro:property name="depth_fps" value="30"/>
   <xacro:property name="depth_fov" value="85.2"/>
-  
-  <!-- camera body link -->
+
+  camera body link
   <link name="D435i_camera_link">
     <inertial>
       <mass value="0.564"/>
@@ -72,45 +74,45 @@
       </geometry>
     </collision>
   </link>
-  
-  <!-- camera installed to base_link -->
+
+  camera installed to base_link
   <joint name="base_to_D435i_camera" type="fixed">
     <parent link="base_link"/>
     <child link="D435i_camera_link"/>
     <origin xyz="0.14813 -0.027 0.05957" rpy="0.0 0.0 0.0"/>
   </joint>
-  
-  <!-- depth camera frame -->
+
+  depth camera frame
   <joint name="D435i_camera_depth_joint" type="fixed">
     <origin xyz="0 0 0" rpy="0 0 0"/>
     <parent link="D435i_camera_link"/>
     <child link="D435i_camera_depth_frame"/>
   </joint>
   <link name="D435i_camera_depth_frame"/>
-  
+
   <joint name="D435i_camera_depth_optical_joint" type="fixed">
     <origin xyz="0 0 0" rpy="${-M_PI/2} 0 ${-M_PI/2}"/>
     <parent link="D435i_camera_depth_frame"/>
     <child link="D435i_camera_depth_optical_frame"/>
   </joint>
   <link name="D435i_camera_depth_optical_frame"/>
-  
-  <!-- color camera frame -->
+
+  color camera frame
   <joint name="D435i_camera_color_joint" type="fixed">
     <origin xyz="0 0.015 0" rpy="0 0 0"/>
     <parent link="D435i_camera_depth_frame"/>
     <child link="D435i_camera_color_frame"/>
   </joint>
   <link name="D435i_camera_color_frame"/>
-  
+
   <joint name="D435i_camera_color_optical_joint" type="fixed">
     <origin xyz="0 0 0" rpy="${-M_PI/2} 0 ${-M_PI/2}"/>
     <parent link="D435i_camera_color_frame"/>
     <child link="D435i_camera_color_optical_frame"/>
   </joint>
   <link name="D435i_camera_color_optical_frame"/>
-  
-  <!-- Gazebo color camera sensor -->
+
+  Gazebo color camera sensor
   <gazebo reference="D435i_camera_link">
     <sensor name="D435i_camera_color" type="camera">
       <camera>
@@ -137,8 +139,8 @@
       <topic>D435i_camera/color/image_raw</topic>
     </sensor>
   </gazebo>
-  
-  <!-- Gazebo depth camera sensor -->
+
+  Gazebo depth camera sensor
   <gazebo reference="D435i_camera_link">
     <sensor name="D435i_camera_depth" type="depth_camera">
       <camera>
@@ -185,6 +187,7 @@
          <visualize>true</visualize>
        </sensor>
   </gazebo>
+  -->
 
   <!-- 5) gz-sim's Lidar sensor: URDF Gazebo extension written in <gazebo>
        topic suggest use scan, finally bridge to ROS's /scan or <ns>/scan -->

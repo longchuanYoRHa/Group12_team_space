@@ -366,6 +366,32 @@ def find_enclosed_blobs_in_map(
     return result
 
 
+def get_interest_points_from_pgm(
+    pgm_path: str,
+    resolution: float = DEFAULT_RESOLUTION,
+    origin: Tuple[float, float] = DEFAULT_ORIGIN,
+    min_pixels: int = 5,
+    max_pixels: int = 500,
+    non_white: bool = True,
+    white_ratio_min: float = 0.4,
+) -> List[Tuple[float, float]]:
+    """
+    从 PGM 地图中识别兴趣点，返回地图坐标系下的 (mx, my) 列表。
+    供 task_manager 等节点调用，用于探索完成后基于地图的补检。
+    """
+    w, h, pixels = load_pgm(pgm_path)
+    blobs = find_enclosed_blobs_in_map(
+        w, h, pixels, min_pixels, max_pixels,
+        non_white=non_white, white_ratio_min=white_ratio_min,
+    )
+    blobs.sort(key=lambda b: (-b[1], b[0]))
+    points = []
+    for cx_px, cy_px, area in blobs:
+        mx, my = pixel_to_map(cx_px, cy_px, resolution, origin[0], origin[1], h)
+        points.append((mx, my))
+    return points
+
+
 def run_detection_enclosed_blobs(
     pgm_path: str,
     resolution: float = DEFAULT_RESOLUTION,

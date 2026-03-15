@@ -7,6 +7,7 @@
   <maintainer email="2674312287@qq.com">student21</maintainer>
   <license>TODO: License declaration</license>
 
+  <depend>action_msgs</depend>
   <depend>rclpy</depend>
   <depend>geometry_msgs</depend>
   <depend>std_msgs</depend>
