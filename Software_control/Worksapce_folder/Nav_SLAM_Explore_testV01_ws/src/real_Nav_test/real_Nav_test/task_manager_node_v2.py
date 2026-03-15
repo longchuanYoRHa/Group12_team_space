@@ -231,6 +231,31 @@ class TaskManagerNodeV2(Node):
             self.get_logger().error(f'TF transform to base_link failed: {e}')
             return None
 
+    def _point_camera_to_base_link_mm(self, point_msg: geometry_msgs.Point):
+        """
+        将相机坐标系下的点变换到 base_link 并转为毫米。
+        抓取时使用：仅依赖 camera→base_link 的 static TF，不经过 map。
+        """
+        frame_id = self.get_parameter('camera_frame_id').value
+        point_stamped = geometry_msgs.PointStamped()
+        point_stamped.header.frame_id = frame_id
+        point_stamped.header.stamp = self.get_clock().now().to_msg()
+        point_stamped.point = point_msg
+        try:
+            transform = self.tf_buffer.lookup_transform(
+                'base_link', frame_id, rclpy.time.Time(),
+                timeout=rclpy.duration.Duration(seconds=0.5),
+            )
+            point_in_base = tf2_geometry_msgs.do_transform_point(point_stamped, transform)
+            pt = geometry_msgs.Point()
+            pt.x = point_in_base.point.x * 1000.0
+            pt.y = point_in_base.point.y * 1000.0
+            pt.z = point_in_base.point.z * 1000.0
+            return pt
+        except Exception as e:
+            self.get_logger().error(f'TF camera->base_link failed: {e}')
+            return None
+
     def _publish_explore_resume_if_changed(self, resume: bool):
         if self._last_explore_resume is not None and self._last_explore_resume == resume:
             return
@@ -455,16 +480,21 @@ class TaskManagerNodeV2(Node):
 
     def _object_point_callback(self, msg: geometry_msgs.Point, color: str):
         """
-        统一处理三个 /target_pick/* 话题。
+        统一处理三个 /target_pick/* 话题。视觉点为 camera frame。
         根据当前状态决定行为：
-        - EXPLORE 或 WAIT_AT_INTEREST_POINT：稳定检测到物体 -> 停止探索/保持静止，直接导航到预抓取位
-        - GRASP：使用最新视觉信息执行抓取动作
+        - NAV_TO_OBJECT_PREGRASP：不更新、不重发 goal，防止重复发送
+        - EXPLORE 或 WAIT_AT_INTEREST_POINT：稳定检测 -> 物体转 map、算进近点并导航（camera→map）
+        - GRASP：用当前视觉点直接 camera→base_link 发抓取目标，不经过 map
         """
         self.detected_object_colors.add(color)
 
         # 只有空载时才考虑新的抓取目标
         if self.cargo_state != CargoState.EMPTY:
             self.object_detection_count = 0
+            return
+
+        # 已在前往预抓取位时不再更新目标，防止重复发送 goal
+        if self.current_state == TaskState.NAV_TO_OBJECT_PREGRASP:
             return
 
         try:
@@ -480,9 +510,9 @@ class TaskManagerNodeV2(Node):
 
         self.object_pose = pose_stamped
 
-        # 如果当前处于 GRASP 状态：直接使用视觉反馈执行抓取（不再导航）
+        # 如果当前处于 GRASP 状态：用当前视觉点 camera→base_link 直接算抓取目标（不经过 map）
         if self.current_state == TaskState.GRASP:
-            self._execute_grasp_with_current_object()
+            self._execute_grasp_with_current_object(msg)
             return
 
         # 只在探索或兴趣点等待时用检测计数来触发导航
@@ -521,23 +551,19 @@ class TaskManagerNodeV2(Node):
         self.current_state = TaskState.NAV_TO_OBJECT_PREGRASP
         self._send_nav_goal(goal_pose, NavPurpose.OBJECT_PREGRASP)
 
-    def _execute_grasp_with_current_object(self):
+    def _execute_grasp_with_current_object(self, point_msg: geometry_msgs.Point):
         """
         在 GRASP 状态下，由 object 话题回调触发。
-        仅发送一次抓取目标到 /arm/target_pick（base_link 下毫米）；
-        成功/失败由定时器根据 /arm/status、/arm/gripper_status 异步判断并做状态转换。
+        使用当前视觉点（camera frame）直接变换到 base_link（毫米），不经过 map；
+        camera→base_link 与机械臂基座→base_link 均为 static TF。
+        仅发送一次抓取目标到 /arm/target_pick；成功/失败由定时器根据 /arm/status、/arm/gripper_status 判断。
         """
-        if self.object_pose is None:
-            self.get_logger().error('GRASP state but object_pose is None!')
-            return
         if self._arm_cmd_sent:
             return
-
-        target_pt = self._get_point_in_base_link_mm(self.object_pose)
+        target_pt = self._point_camera_to_base_link_mm(point_msg)
         if target_pt is None:
-            self.get_logger().warn('Grasp: cannot get target in base_link, skipping this cycle')
+            self.get_logger().warn('Grasp: camera->base_link failed, skipping this cycle')
             return
-
         self.get_logger().info('Sending pick target to manipulator (/arm/target_pick)...')
         self.arm_pick_pub.publish(target_pt)
         self._arm_cmd_sent = True
