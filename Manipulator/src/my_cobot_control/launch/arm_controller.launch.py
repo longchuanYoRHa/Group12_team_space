@@ -9,7 +9,7 @@ Starts:
   3. (optional) rviz2       — visualisation
 
 All nodes run under namespace 'arm' to avoid topic clashes with Leo Rover.
-
+Fixed camera to arm TF frames
 Usage:
   ros2 launch my_cobot_control arm_controller.launch.py
   ros2 launch my_cobot_control arm_controller.launch.py rviz:=true

@@ -1,24 +1,24 @@
-# Manipulator Control / MyCobot 280 Pi Control Package
+# MyCobot 280 Pi Manipulator Control Package
 
 **This package is still in development.**
-ROS2 control package used for MyCobot 280pi Manipulator. Supports RViz visualization, Gazebo simulation and real hardware control.
+ROS2 control package used for Elephant Robotics MyCobot 280pi Manipulator. Supports RViz visualization, Gazebo simulation and real hardware control.
 
 ## Features
 
-- 🤖 Supports MyCobot 280 Pi Manipulator (with Adaptive Gripper)
-- 📊 RViz visualization simulation
-- 🌍 Gazebo physics simulation (with and without gripper)
-- 🎮 Pick and Place demonstration
-- 🔄 Mock mode local testing (no hardware required)
-- 📡 ROS 2 distributed control (supports WiFi communication)
-- 🐍 Compatible with pymycobot API
+- Supports MyCobot 280 Pi Manipulator (with Adaptive Gripper)
+- RViz visualization simulation
+- Gazebo physics simulation (with and without gripper)
+- Pick and Place demonstration
+- Mock mode local testing (no hardware required)
+- ROS 2 distributed control (supports WiFi communication)
+- Compatible with pymycobot API
 
-## Package Structure
+## File Structure
 
 ```
-my_cobot_control    -- Manipulator Control Package and Calibration Tools
-mycobot_ros2        -- Official ROS 2 Package for myCobot Manipulator (URDF)
-mycobot280_pi       -- Gazebo Simulation Package (mltejas88/Project_Mycobot_280pi_simulation)
+scripts   -- Inculuding some calibration tools for arm and gripper 
+my_cobot_control    -- Manipulator Control Package (URDF, TF2, Controllers, Pick-and-Place Logic)
+mycobot280_pi       -- Gazebo Simulation Package (from mltejas88/Project_Mycobot_280pi_simulation)
 ```
 
 ## System Requirements
@@ -27,8 +27,8 @@ mycobot280_pi       -- Gazebo Simulation Package (mltejas88/Project_Mycobot_280p
 - **ROS 2**: Jazzy (or Humble)
 - **Python**: 3.12+
 - **Dependencies**:
-  - `pymycobot` (hardware control & inverse kinematics)
-  - `mycobot_ros2` (official URDF model and ROS 2 integration)
+  - `pymycobot` (hardware control & inverse kinematics from Elephant Robotics)
+  - `mycobot_ros2` (official URDF model and ROS 2 integration from Elephant Robotics)
   - `gazebo` / `gz-sim` (Gazebo simulation)
   - `ros-$ROS_DISTRO-gazebo-ros-pkgs` (Gazebo ROS bridge)
   - `ros-$ROS_DISTRO-joint-state-publisher`
@@ -60,9 +60,10 @@ git clone -b humble https://github.com/elephantrobotics/mycobot_ros2.git
 # Source: https://github.com/mltejas88/Project_Mycobot_280pi_simulation
 ```
 
-### 3. Build Workspace and Virtual Environment on 
+### 3. Build Workspace
 
 ```bash
+# (Optional) Create a Python virtual environment for pymycobot
 cd ~/mycobot_ws
 python3 -m venv venv_mycobot
 source venv_mycobot/bin/activate
@@ -75,7 +76,7 @@ pip install pymycobot
 # pip install ./pymycobot
 ```
 
-> **Note:** The virtual environment is required to avoid conflicts between `pymycobot` and ROS 2 Python dependencies. Always activate it before running scripts that use `pymycobot`.
+> **Note:** Sometimes the virtual environment is required to avoid conflicts between `pymycobot` and ROS 2 Python dependencies.
 
 ### 4. Build ROS 2 Packages
 
@@ -101,6 +102,8 @@ ros2 launch my_cobot_control pick_and_place_demo.launch.py
 This will:
 1. Launch RViz to display the MyCobot 280 model (with Adaptive Gripper)
 2. Loop pick and place presentation
+
+This part is abandoned for now, as we are focusing on Gazebo simulation and real hardware control. The RViz launch file is still available for testing the TF2 setup and joint state publishers without Gazebo or hardware.
 
 ---
 
@@ -148,7 +151,7 @@ killall -9 ruby gz
 
 ---
 
-# 3 Hardware Controller (Real Arm)
+# 3 Hardware Controller Test (Real Arm)
 
 ## 3.1 Architecture Overview
 
@@ -193,16 +196,36 @@ NUC                                           Pi (arm)
  │◄── sub /arm/status == "idle" ───────────────│  Done, ready for next block
 ```
 
+```
+TF2 Frame Hierarchy:
+base_link
+  └── arm_base_link
+        └── joint6_flange
+              └── gripper_tip
+```
+
 ## 3.2 Run on Pi (Real Hardware)
 
 ### Deploy to Pi
 ```bash
 # From NUC, copy the source to Pi
-scp -r ~/mycobot_ws/src/my_cobot_control elephant@10.3.14.59:~/ros2_ws/src/
+scp -r ~/mycobot_ws/src/my_cobot_control elephant@10.0.1.3:~/ros2_ws/src/
 
 # SSH into Pi
-ssh elephant@10.3.14.59
+ssh elephant@10.0.1.3
 # password: trunk
+
+# syc time
+sudo date -s "$(ssh leo-rover-12@10.0.1.4 'date -u +%Y-%m-%d\ %H:%M:%S.%N')"
+sudo date -s "$(ssh student42@10.0.1.4 'date -u +%Y-%m-%d\ %H:%M:%S.%N')"
+# check NTP status for timesync
+sudo systemctl status ntp
+# check hardware clock
+timedatectl  
+
+# netplan
+sudo nano /etc/netplan/99-wired-static.yaml
+sudo netplan apply
 
 # Build on Pi
 cd ~/ros2_ws
@@ -213,13 +236,10 @@ source install/setup.bash
 ### Launch the arm controller
 ```bash
 # On Pi — start the controller (all nodes under /arm namespace)
-ros2 launch my_cobot_control arm_controller.launch.py
+ros2 launch my_cobot_control mycobot_with_tf2.launch.py
 
 # With custom parameters
-ros2 launch my_cobot_control arm_controller.launch.py safe_z:=250.0 move_speed:=40
-
-# With RViz (requires display)
-ros2 launch my_cobot_control arm_controller.launch.py rviz:=true
+ros2 launch my_cobot_control mycobot_with_tf2.launch.py use_mock:=false safe_z:=250.0 move_speed:=40
 ```
 
 ### Or run the node directly (without launch file)
@@ -227,16 +247,27 @@ ros2 launch my_cobot_control arm_controller.launch.py rviz:=true
 ros2 run my_cobot_control mycobot_controller --ros-args -r __ns:=/arm
 ```
 
-## 3.3 Run on NUC (Mock Mode / Development)
+## 3.3 Run on Dev Machine (Mock Mode / Development)
 
 When no hardware is connected (no `/dev/ttyAMA0`), the controller automatically enters **MOCK mode** — all hardware calls are simulated with print outputs.
 
 ```bash
-# On NUC (dev machine)
+# On dev machine
 cd ~/mycobot_ws
 colcon build --packages-select my_cobot_control
 source install/setup.bash
-ros2 launch my_cobot_control arm_controller.launch.py
+
+# Default: real hardware + base_link->g_base
+ros2 launch my_cobot_control mycobot_with_tf2.launch.py
+
+# Mock mode (no hardware, with GUI for joint angles)
+ros2 launch my_cobot_control mycobot_with_tf2.launch.py use_mock:=true
+
+# Mock mode with camera_link
+ros2 launch my_cobot_control mycobot_with_tf2.launch.py use_mock:=true use_camera_link:=true
+
+# With RViz visualization (optional, requires TF2 setup)
+ros2 launch my_cobot_control mycobot_with_rviz.launch.py
 ```
 
 ## 3.4 Test Commands
@@ -318,16 +349,28 @@ ros2 topic list | grep arm
 #   /arm/target_place
 ```
 
+### Test 7: TF2 Transform Validation
+```bash
+# Check TF2 tree structure
+cd ~/mycobot_ws  #or cd ~/ros2_ws
+ros2 run tf2_tools view_frames
+evince frames.pdf
+
+# Run the TF2 transform test script (requires camera TF setup)
+cd ~/ros2_ws/scripts
+python3 scripts/test_tf2_transform.py
+
+# Visualize in RViz (optional, requires rviz launch)
+ros2 launch my_cobot_control mycobot_with_rviz.launch.py
+```
+
 ## 3.6 Standalone Calibration Test (No ROS 2)
 
 A standalone script is available for testing pick-and-place with calibrated coordinates directly on the Pi, **without ROS 2**:
 
 ```bash
-# SSH into Pi
-ssh elephant@10.3.14.59
-
 # Run directly with Python (requires pymycobot)
-cd ~/ros2_ws/src/my_cobot_control/my_cobot_control
+cd ~/ros2_ws/scripts
 python3 test_calibration_pick_place.py
 ```
 
@@ -339,7 +382,7 @@ Use the calibration tool to record new home/pickup/place positions by dragging t
 
 ```bash
 # On Pi
-cd ~/ros2_ws/src/my_cobot_control/my_cobot_control
+cd ~/ros2_ws/scripts
 python3 calibration_tool.py
 ```
 
@@ -361,7 +404,232 @@ ros2 run my_cobot_control mycobot_controller --ros-args \
 | `Object lost during lift` | Grip too weak or object slipped | Increase `gripper_torque` parameter (up to 980) |
 | `Coordinate x=... out of range` | Target outside workspace | Check coordinate frame, values must be in mm |
 | Build error: `shebang too long` | venv path hardcoded on Pi | `setup.py` auto-detects venv; rebuild |
-|Timesync issue (hardware clock drift) | Arm movements erratic | Sync Pi clock with NUC: `ssh elephant@10.3.14.59 "sudo date -s '$(date -u +%m%d%H%M%Y.%S)'"`|
+|Timesync issue (hardware clock drift) | Arm movements erratic | Sync Pi clock with NUC: `ssh elephant@10.0.1.4 "sudo date -s '$(date -u +%m%d%H%M%Y.%S)'"`|
+---
+
+## 4. ROS2 Communication Interface Reference
+
+> This section lists all ROS2 interfaces exposed by the `mycobot_controller_tf2` node, for NUC-side integration.
+
+### 4.1 Node Info
+
+| Item | Value |
+|---|---|
+| Node name | `mycobot_controller` |
+| Namespace | `/arm` |
+| Executable | `mycobot_controller_tf2` |
+| Package | `my_cobot_control` |
+
+---
+
+### 4.2 Subscribed Topics (NUC → Arm)
+
+| Full Topic | Message Type | Frame | Description |
+|---|---|---|---|
+| `/arm/target_pick` | `geometry_msgs/msg/Point` | `base_link` | 3D pick coords (mm). Only accepted in `IDLE` state. Triggers full pick sequence. |
+| `/arm/target_place` | `geometry_msgs/msg/Point` | `base_link` | 3D place coords (mm). Only accepted in `HOLDING` state. Triggers place + return. |
+
+**Message field layout (`geometry_msgs/msg/Point`):**
+
+```yaml
+x: float64   # X coordinate (mm) in base_link frame
+y: float64   # Y coordinate (mm) in base_link frame
+z: float64   # Z coordinate (mm) in base_link frame
+```
+
+**Coordinate Limits (arm base frame, after TF2 transform):**
+
+| Axis | Min (mm) | Max (mm) |
+|---|---|---|
+| x | -281.45 | 281.45 |
+| y | -281.45 | 281.45 |
+| z | -70.0 | 450.0 |
+
+---
+
+### 4.3 Published Topics (Arm → NUC)
+
+| Full Topic | Message Type | Rate | Description |
+|---|---|---|---|
+| `/arm/status` | `std_msgs/msg/String` | On state change | Current arm state (see state list below) |
+| `/arm/gripper_status` | `std_msgs/msg/String` | On grip event | Gripper feedback (see gripper states below) |
+| `/arm/joint_states` | `sensor_msgs/msg/JointState` | 10 Hz | Real-time joint angles (radians) |
+
+**`/arm/status` possible values:**
+
+| Value | Meaning |
+|---|---|
+| `idle` | Ready to accept new pick command |
+| `moving_to_pick` | Moving above pick target |
+| `descending_pick` | Descending to pick height |
+| `gripping` | Closing gripper |
+| `grip_check` | Verifying grip |
+| `lifting` | Lifting object to safe height |
+| `returning_home` | Moving back to home angles |
+| `holding` | Block secured, arm locked at home. Ready to accept place command |
+| `moving_to_place` | Moving above bin |
+| `releasing` | Opening gripper to drop block |
+| `error` | Error occurred, check logs |
+
+**`/arm/gripper_status` possible values:**
+
+| Value | Meaning |
+|---|---|
+| `object_held` | Grip confirmed, object in gripper |
+| `no_object` | Grip attempt failed, nothing detected |
+| `released` | Gripper opened (after place) |
+| `object_dropped` | Object lost during lift or transit |
+| `unknown` | Gripper value unreadable |
+
+**`/arm/joint_states` field layout (`sensor_msgs/msg/JointState`):**
+
+```yaml
+header:
+  stamp: <timestamp>
+name: [
+  'joint2_to_joint1',
+  'joint3_to_joint2',
+  'joint4_to_joint3',
+  'joint5_to_joint4',
+  'joint6_to_joint5',
+  'joint6output_to_joint6'
+]
+position: [j1, j2, j3, j4, j5, j6]   # radians
+```
+
+---
+
+### 4.4 TF2 Frames
+
+| Frame | Parent | Source | Description |
+|---|---|---|---|
+| `base_link` | — | NUC / Camera node | Camera optical origin. Input coords are in this frame |
+| `g_base` | `base_link` | Static TF (launch file) | Arm base (`arm_base_link` in URDF). Fixed offset from base_link (rover) |
+| `joint6_flange` | `g_base` | `robot_state_publisher` | End-effector flange |
+| `gripper_tip` | `joint6_flange` | Static TF (launch file) | Gripper finger tip. Z offset = 79 mm |
+
+Default static transform (`base_link` → `g_base`):
+
+| Param | Default | Description |
+|---|---|---|
+| `camera_x` | `0.0379` m | X offset |
+| `camera_y` | `0.0641` m | Y offset |
+| `camera_z` | `-0.0486` m | Z offset |
+| `camera_pitch` | `-0.5236` rad | Pitch (-30°) |
+
+---
+
+### 4.5 Launch Parameters
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `safe_z` | float | `250.0` | Safe travel height (mm) |
+| `move_speed` | int | `40` | Arm speed (1–100) |
+| `gripper_speed` | int | `80` | Gripper speed (1–100) |
+| `gripper_torque` | int | `300` | Gripper holding torque (1–980) |
+| `grip_threshold` | int | `25` | Min gripper value to confirm grip |
+| `grip_check_retries` | int | `2` | Number of grip check retries |
+| `end_rx` | float | `-178.0` | End-effector roll (deg) |
+| `end_ry` | float | `0.0` | End-effector pitch (deg) |
+| `end_rz` | float | `0.0` | End-effector yaw (deg) |
+| `home_angles` | float[] | `[0,0,0,0,0,0]` | Home joint angles (deg) |
+| `calibration_file` | string | `''` | Path to calibration JSON |
+| `camera_frame` | string | `camera_link` | TF2 source frame for input coords |
+| `arm_base_frame` | string | `g_base` | TF2 arm base frame |
+| `tf_timeout` | float | `1.0` | TF2 lookup timeout (s) |
+| `compensate_gripper_offset` | bool | `true` | Auto subtract gripper Z offset |
+| `gripper_offset_z` | float | `79.0` | Fallback gripper Z offset (mm) |
+| `use_mock` | bool | `true` | Launch joint GUI (dev) or real hw |
+
+---
+
+### 4.6 NUC-Side Quick Reference (Python)
+
+Minimal ROS2 publisher example for pick-and-place from NUC:
+
+```python
+import rclpy
+from rclpy.node import Node
+from geometry_msgs.msg import Point
+from std_msgs.msg import String
+
+class NucArmClient(Node):
+    def __init__(self):
+        super().__init__('nuc_arm_client')
+
+        self.pick_pub = self.create_publisher(Point, '/arm/target_pick', 10)
+        self.place_pub = self.create_publisher(Point, '/arm/target_place', 10)
+
+        self.create_subscription(String, '/arm/status', self._status_cb, 10)
+        self.create_subscription(String, '/arm/gripper_status', self._gripper_cb, 10)
+
+        self._status = 'idle'
+
+    def _status_cb(self, msg: String):
+        self._status = msg.data
+        self.get_logger().info(f'Arm status: {self._status}')
+
+    def _gripper_cb(self, msg: String):
+        self.get_logger().info(f'Gripper: {msg.data}')
+
+    def send_pick(self, x, y, z):
+        """Send pick target in camera_link frame (mm)."""
+        msg = Point()
+        msg.x, msg.y, msg.z = float(x), float(y), float(z)
+        self.pick_pub.publish(msg)
+        self.get_logger().info(f'Sent pick: ({x}, {y}, {z})')
+
+    def send_place(self, x, y, z):
+        """Send place target in camera_link frame (mm)."""
+        msg = Point()
+        msg.x, msg.y, msg.z = float(x), float(y), float(z)
+        self.place_pub.publish(msg)
+        self.get_logger().info(f'Sent place: ({x}, {y}, {z})')
+
+    @property
+    def is_idle(self):
+        return self._status == 'idle'
+
+    @property
+    def is_holding(self):
+        return self._status == 'holding'
+
+
+def main():
+    rclpy.init()
+    node = NucArmClient()
+
+    # Example: wait until idle, send pick
+    import time
+    while rclpy.ok():
+        rclpy.spin_once(node, timeout_sec=0.1)
+        if node.is_idle:
+            node.send_pick(202.2, -129.3, 237.9)
+            break
+
+    # Wait for holding state
+    while rclpy.ok():
+        rclpy.spin_once(node, timeout_sec=0.1)
+        if node.is_holding:
+            node.send_place(66.7, -218.2, 123.7)
+            break
+
+    rclpy.spin(node)
+    node.destroy_node()
+    rclpy.shutdown()
+```
+
+---
+
+### 4.7 ROS_DOMAIN_ID
+
+Make sure the same `ROS_DOMAIN_ID` is set on both NUC and Pi:
+
+```bash
+export ROS_DOMAIN_ID=42   # or any agreed value, default 0
+```
+
+For persistent setting, add to `~/.bashrc` on both machines.
 
 
 ---

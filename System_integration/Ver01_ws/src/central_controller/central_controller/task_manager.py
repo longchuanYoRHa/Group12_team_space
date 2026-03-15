@@ -70,6 +70,11 @@ class TaskManagerNode(Node):
         self.object_pose = None  # Detected object pose (map frame)
         self.bin_pose = None  # Detected bin pose (map frame)
 
+        # ========== Arm state variables ==========
+        self.arm_status = "idle"
+        self.gripper_status = "unknown"
+        self._arm_cmd_sent = False
+
         # ========== Detection stability counters ==========
         # Multi-frame confirmation to reduce false positives
         self.object_detection_count = 0  # Consecutive object detection frames
@@ -107,7 +112,15 @@ class TaskManagerNode(Node):
         self.cargo_state_pub = self.create_publisher(
             std_msgs.String, 'task_manager/cargo_state', 10
         )
-
+        
+        # Arm command publishers for pick and place coordinates (Point in base_link frame, in mm for mycobot)
+        self.arm_pick_pub = self.create_publisher(
+            geometry_msgs.Point, '/arm/target_pick', 10
+        )
+        self.arm_place_pub = self.create_publisher(
+            geometry_msgs.Point, '/arm/target_place', 10
+        )
+        
         # ========== Subscribers (consistent with rover_vision_node topics)==========
         # Grasp target: /target_pick/{red,green,blue}, message type geometry_msgs.Point
         for topic in ['/target_pick/red', '/target_pick/green', '/target_pick/blue']:
@@ -125,6 +138,16 @@ class TaskManagerNode(Node):
                 self.bin_point_callback,
                 qos_profile_sensor_data
             )
+        
+        # Arm status subscribers (from manipulator node)
+        # Arm status: /arm/status (e.g. 'idle', 'holding', 'error')
+        self.arm_status_sub = self.create_subscription(
+            std_msgs.String, '/arm/status', self.arm_status_callback, 10
+        )
+        # Gripper status: /arm/gripper_status (e.g. 'object_held', 'unknown')
+        self.arm_gripper_status_sub = self.create_subscription(
+            std_msgs.String, '/arm/gripper_status', self.arm_gripper_status_callback, 10
+        )
 
         #TODO: create service for other node to check task state
 
@@ -143,6 +166,32 @@ class TaskManagerNode(Node):
         self.declare_parameter('camera_frame_id', 'camera_depth_optical_frame')  # Vision point frame
 
         self.get_logger().info('Task manager node initialized')
+
+    def arm_status_callback(self, msg):
+        self.arm_status = msg.data.lower()
+
+    def arm_gripper_status_callback(self, msg):
+        self.gripper_status = msg.data.lower()
+
+    def _get_point_in_base_link_mm(self, pose_stamped):
+        """Transform a pose to base_link and convert to mm for the arm controller."""
+        try:
+            transform = self.tf_buffer.lookup_transform(
+                'base_link', 
+                pose_stamped.header.frame_id, 
+                rclpy.time.Time(),
+                timeout=rclpy.duration.Duration(seconds=0.5)
+            )
+            pose_in_base = tf2_geometry_msgs.do_transform_pose(pose_stamped.pose, transform)
+            pt = geometry_msgs.Point()
+            # mycobot requires mm
+            pt.x = pose_in_base.position.x * 1000.0
+            pt.y = pose_in_base.position.y * 1000.0
+            pt.z = pose_in_base.position.z * 1000.0
+            return pt
+        except Exception as e:
+            self.get_logger().error(f'TF transform to base_link failed: {e}')
+            return None
 
     def _point_to_pose_stamped_in_map(self, point_msg):
         """
@@ -395,19 +444,33 @@ class TaskManagerNode(Node):
 
         Call arm grasp action (grasp_server). Includes retry and blacklist on failure.
         """
-        # TODO: Call actual grasp action
-        self.get_logger().info('Calling grasp action (placeholder)')
+        if not self._arm_cmd_sent:
+            if self.object_pose is None:
+                self.current_state = TaskState.EXPLORE
+                return
+            
+            target_pt = self._get_point_in_base_link_mm(self.object_pose)
+            if target_pt is None:
+                self.current_state = TaskState.EXPLORE
+                return
 
-        grasp_success = True  # Placeholder
+            self.get_logger().info('Sending pick target to manipulator...')
+            self.arm_pick_pub.publish(target_pt)
+            self._arm_cmd_sent = True
+            return
 
-        if grasp_success:
+        # Check async status
+        if self.arm_status == 'holding' and self.gripper_status == 'object_held':
             self.get_logger().info('Grasp succeeded!')
             self.cargo_state = CargoState.HAS_OBJECT
             self.grasp_retry_count = 0
             self.adjust_nav2_for_carry_mode(True)
+            self._arm_cmd_sent = False
             self.current_state = TaskState.RESUME_EXPLORE_FOR_BIN
-        else:
+
+        elif self.arm_status == 'error' or (self.arm_status == 'idle' and self._arm_cmd_sent):
             self.grasp_retry_count += 1
+            self._arm_cmd_sent = False
             if self.grasp_retry_count >= self.max_grasp_retries:
                 self.get_logger().warn('Grasp failed, max retries reached, abandoning object')
                 if self.object_pose:
@@ -488,19 +551,32 @@ class TaskManagerNode(Node):
 
         Execute place action (gripper -> bin). Includes retry on failure.
         """
-        # TODO: Call actual place action
-        self.get_logger().info('Calling place action (placeholder)')
+        if not self._arm_cmd_sent:
+            if self.bin_pose is None:
+                self.current_state = TaskState.RESUME_EXPLORE_FOR_BIN
+                return
+                
+            target_pt = self._get_point_in_base_link_mm(self.bin_pose)
+            if target_pt is None:
+                self.current_state = TaskState.RESUME_EXPLORE_FOR_BIN
+                return
+            
+            self.get_logger().info('Sending place target to manipulator...')
+            self.arm_place_pub.publish(target_pt)
+            self._arm_cmd_sent = True
+            return
 
-        place_success = True  # Placeholder
-
-        if place_success:
+        if self.arm_status == 'idle':
             self.get_logger().info('Place succeeded!')
             self.cargo_state = CargoState.EMPTY
             self.place_retry_count = 0
             self.adjust_nav2_for_carry_mode(False)
+            self._arm_cmd_sent = False
             self.current_state = TaskState.POST_ACTION
-        else:
+
+        elif self.arm_status == 'error':
             self.place_retry_count += 1
+            self._arm_cmd_sent = False
             if self.place_retry_count >= self.max_place_retries:
                 self.get_logger().warn('Place failed, max retries reached, resuming explore for bin')
                 self.place_retry_count = 0
