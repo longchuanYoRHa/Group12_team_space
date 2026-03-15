@@ -51,15 +51,8 @@ z: float64   # Z coordinate (mm) in base_link frame
 | Value | Meaning |
 |---|---|
 | `idle` | Ready to accept new pick command |
-| `moving_to_pick` | Moving above pick target |
-| `descending_pick` | Descending to pick height |
-| `gripping` | Closing gripper |
-| `grip_check` | Verifying grip |
-| `lifting` | Lifting object to safe height |
-| `returning_home` | Moving back to home angles |
+| `busy` | Intermediate execution states (moving, gripping, lifting, releasing, etc.). See ROS logs for details |
 | `holding` | Block secured, arm locked at home. Ready to accept place command |
-| `moving_to_place` | Moving above bin |
-| `releasing` | Opening gripper to drop block |
 | `error` | Error occurred, check logs |
 
 **`/arm/gripper_status` possible values:**
@@ -67,9 +60,7 @@ z: float64   # Z coordinate (mm) in base_link frame
 | Value | Meaning |
 |---|---|
 | `object_held` | Grip confirmed, object in gripper |
-| `no_object` | Grip attempt failed, nothing detected |
-| `released` | Gripper opened (after place) |
-| `object_dropped` | Object lost during lift or transit |
+| `no_object` | No object (includes grip failed, object lost, or gripper released) |
 | `unknown` | Gripper value unreadable |
 
 **`/arm/joint_states` field layout (`sensor_msgs/msg/JointState`):**
@@ -107,3 +98,39 @@ Default static transform (`base_link` → `g_base`):
 | `camera_y` | `0.0641` m | Y offset |
 | `camera_z` | `-0.0486` m | Z offset |
 | `camera_pitch` | `-0.5236` rad | Pitch (-30°) |
+
+---
+
+## 5 Launch Parameters
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `safe_z` | float | `250.0` | Safe travel height (mm) |
+| `move_speed` | int | `40` | Arm speed (1–100) |
+| `gripper_speed` | int | `80` | Gripper speed (1–100) |
+| `gripper_torque` | int | `300` | Gripper holding torque (1–980) |
+| `grip_threshold` | int | `25` | Min gripper value to confirm grip |
+| `grip_check_retries` | int | `2` | Number of grip check retries |
+| `end_rx` | float | `-178.0` | End-effector roll (deg) |
+| `end_ry` | float | `0.0` | End-effector pitch (deg) |
+| `end_rz` | float | `0.0` | End-effector yaw (deg) |
+| `home_angles` | float[] | `[0,0,0,0,0,0]` | Home joint angles (deg) |
+| `calibration_file` | string | `''` | Path to calibration JSON |
+| `camera_frame` | string | `camera_link` | TF2 source frame for input coords |
+| `arm_base_frame` | string | `g_base` | TF2 arm base frame |
+| `tf_timeout` | float | `1.0` | TF2 lookup timeout (s) |
+| `compensate_gripper_offset` | bool | `true` | Auto subtract gripper Z offset |
+| `gripper_offset_z` | float | `79.0` | Fallback gripper Z offset (mm) |
+| `use_mock` | bool | `true` | Launch joint GUI (dev) or real hw |
+
+---
+
+## 6 ROS_DOMAIN_ID
+
+Make sure the same `ROS_DOMAIN_ID` is set on both NUC and Pi:
+
+```bash
+export ROS_DOMAIN_ID=12   # or any agreed value, default 0
+```
+
+For persistent setting, add to `~/.bashrc` on both machines.
