@@ -126,6 +126,26 @@ class TaskManagerNodeV2(Node):
         self.state_pub = self.create_publisher(std_msgs.String, 'task_manager/state', 10)
         self.cargo_state_pub = self.create_publisher(std_msgs.String, 'task_manager/cargo_state', 10)
 
+        # ========== 机械臂：与 central_controller/task_manager 一致 ==========
+        # 状态变量
+        self.arm_status = "idle"
+        self.gripper_status = "unknown"
+        self._arm_cmd_sent = False
+        # 发布抓取/放置目标点（base_link 下毫米，供 mycobot 等使用）
+        self.arm_pick_pub = self.create_publisher(
+            geometry_msgs.Point, '/arm/target_pick', 10
+        )
+        self.arm_place_pub = self.create_publisher(
+            geometry_msgs.Point, '/arm/target_place', 10
+        )
+        # 订阅机械臂状态（来自 manipulator 节点）
+        self.arm_status_sub = self.create_subscription(
+            std_msgs.String, '/arm/status', self._arm_status_callback, 10
+        )
+        self.arm_gripper_status_sub = self.create_subscription(
+            std_msgs.String, '/arm/gripper_status', self._arm_gripper_status_callback, 10
+        )
+
         # ========== 订阅 vision 话题（6 个） ==========
         for color, topic in [('red', '/target_pick/red'), ('green', '/target_pick/green'), ('blue', '/target_pick/blue')]:
             self.create_subscription(
@@ -185,6 +205,31 @@ class TaskManagerNodeV2(Node):
         response.success = True
         response.message = f'state={self.current_state.value}, cargo={self.cargo_state.value}'
         return response
+
+    def _arm_status_callback(self, msg: std_msgs.String):
+        self.arm_status = msg.data.lower()
+
+    def _arm_gripper_status_callback(self, msg: std_msgs.String):
+        self.gripper_status = msg.data.lower()
+
+    def _get_point_in_base_link_mm(self, pose_stamped: geometry_msgs.PoseStamped):
+        """将位姿变换到 base_link 并转为毫米，供机械臂控制器使用。"""
+        try:
+            transform = self.tf_buffer.lookup_transform(
+                'base_link',
+                pose_stamped.header.frame_id,
+                rclpy.time.Time(),
+                timeout=rclpy.duration.Duration(seconds=0.5),
+            )
+            pose_in_base = tf2_geometry_msgs.do_transform_pose(pose_stamped.pose, transform)
+            pt = geometry_msgs.Point()
+            pt.x = pose_in_base.position.x * 1000.0
+            pt.y = pose_in_base.position.y * 1000.0
+            pt.z = pose_in_base.position.z * 1000.0
+            return pt
+        except Exception as e:
+            self.get_logger().error(f'TF transform to base_link failed: {e}')
+            return None
 
     def _publish_explore_resume_if_changed(self, resume: bool):
         if self._last_explore_resume is not None and self._last_explore_resume == resume:
@@ -293,6 +338,70 @@ class TaskManagerNodeV2(Node):
         else:
             self.get_logger().info('Carry mode off: normal parameters restored')
 
+    def _handle_grasp_arm_result(self):
+        """
+        在 GRASP 状态且已发送抓取命令后，根据 /arm/status、/arm/gripper_status 做状态转换。
+        与 central_controller task_manager 的 handle_grasp_state 结果判断一致。
+        """
+        if self.arm_status == 'holding' and self.gripper_status == 'object_held':
+            self.get_logger().info('Grasp succeeded!')
+            self.cargo_state = CargoState.HAS_OBJECT
+            self.grasp_retry_count = 0
+            self.adjust_nav2_for_carry_mode(True)
+            self._arm_cmd_sent = False
+            self.current_state = TaskState.RESUME_EXPLORE_FOR_BIN
+            self._start_bin_search_or_go_to_cached()
+            return
+
+        if self.arm_status == 'error' or (self.arm_status == 'idle' and self._arm_cmd_sent):
+            self.grasp_retry_count += 1
+            self._arm_cmd_sent = False
+            if self.grasp_retry_count >= self.max_grasp_retries:
+                self.get_logger().warn('Grasp failed, max retries reached, abandoning object')
+                if self.object_pose:
+                    self.object_blacklist.append(self.object_pose.pose.position)
+                self.grasp_retry_count = 0
+                self.current_state = TaskState.EXPLORE
+                self._publish_explore_resume_if_changed(True)
+            else:
+                self.get_logger().info(
+                    f'Grasp failed, retrying ({self.grasp_retry_count}/{self.max_grasp_retries})'
+                )
+
+    def _handle_place_arm_result(self):
+        """
+        在 PLACE_IN_BIN 状态且已发送放置命令后，根据 /arm/status 做状态转换。
+        与 central_controller task_manager 的 handle_place_in_bin_state 结果判断一致。
+        """
+        if self.arm_status == 'idle':
+            self.get_logger().info('Place succeeded!')
+            self.cargo_state = CargoState.EMPTY
+            self.place_retry_count = 0
+            self.adjust_nav2_for_carry_mode(False)
+            self._arm_cmd_sent = False
+            if self.bin_pose is not None:
+                self.bin_blacklist.append(self.bin_pose.pose.position)
+            if self.explore_done_flag:
+                self.current_state = TaskState.NAV_TO_INTEREST_POINT
+                self._nav_to_next_interest_point()
+            else:
+                self.current_state = TaskState.POST_ACTION
+                self._handle_post_action()
+            return
+
+        if self.arm_status == 'error':
+            self.place_retry_count += 1
+            self._arm_cmd_sent = False
+            if self.place_retry_count >= self.max_place_retries:
+                self.get_logger().warn('Place failed, max retries reached, resuming explore for bin')
+                self.place_retry_count = 0
+                self.current_state = TaskState.RESUME_EXPLORE_FOR_BIN
+                self._publish_explore_resume_if_changed(True)
+            else:
+                self.get_logger().info(
+                    f'Place failed, retrying ({self.place_retry_count}/{self.max_place_retries})'
+                )
+
     # ========================= INIT & 状态定时器 =========================
 
     def _handle_init_state(self):
@@ -329,6 +438,14 @@ class TaskManagerNodeV2(Node):
         # 在 INIT 阶段驱动一次性初始化
         if self.current_state == TaskState.INIT:
             self._handle_init_state()
+
+        # GRASP：已发送抓取命令后，根据 /arm/status、/arm/gripper_status 判断成功/失败
+        if self.current_state == TaskState.GRASP and self._arm_cmd_sent:
+            self._handle_grasp_arm_result()
+
+        # PLACE_IN_BIN：已发送放置命令后，根据 /arm/status 判断成功/失败
+        if self.current_state == TaskState.PLACE_IN_BIN and self._arm_cmd_sent:
+            self._handle_place_arm_result()
 
         # WAIT_AT_INTEREST_POINT 的超时逻辑
         if self.current_state == TaskState.WAIT_AT_INTEREST_POINT:
@@ -407,42 +524,23 @@ class TaskManagerNodeV2(Node):
     def _execute_grasp_with_current_object(self):
         """
         在 GRASP 状态下，由 object 话题回调触发。
-        这里调用实际抓取动作（当前为占位实现）。
+        仅发送一次抓取目标到 /arm/target_pick（base_link 下毫米）；
+        成功/失败由定时器根据 /arm/status、/arm/gripper_status 异步判断并做状态转换。
         """
         if self.object_pose is None:
             self.get_logger().error('GRASP state but object_pose is None!')
             return
+        if self._arm_cmd_sent:
+            return
 
-        self.get_logger().info('Calling grasp action (placeholder) with latest vision object pose')
+        target_pt = self._get_point_in_base_link_mm(self.object_pose)
+        if target_pt is None:
+            self.get_logger().warn('Grasp: cannot get target in base_link, skipping this cycle')
+            return
 
-        grasp_success = True  # TODO: 替换为真实抓取动作
-
-        if grasp_success:
-            self.get_logger().info('Grasp succeeded!')
-            self.cargo_state = CargoState.HAS_OBJECT
-            self.grasp_retry_count = 0
-            self.adjust_nav2_for_carry_mode(True)
-            # 抓取成功：如果已经有缓存的 bin 位姿（对应颜色），可以直接走 bin 流程
-            if self.cached_bin_poses:
-                self.current_state = TaskState.RESUME_EXPLORE_FOR_BIN
-                self._start_bin_search_or_go_to_cached()
-            else:
-                # 默认继续探索寻找 bin
-                self.current_state = TaskState.RESUME_EXPLORE_FOR_BIN
-                self._publish_explore_resume_if_changed(True)
-        else:
-            self.grasp_retry_count += 1
-            if self.grasp_retry_count >= self.max_grasp_retries:
-                self.get_logger().warn('Grasp failed, max retries reached, abandoning object')
-                if self.object_pose:
-                    self.object_blacklist.append(self.object_pose.pose.position)
-                self.grasp_retry_count = 0
-                self.current_state = TaskState.EXPLORE
-                self._publish_explore_resume_if_changed(True)
-            else:
-                self.get_logger().info(
-                    f'Grasp failed, retrying ({self.grasp_retry_count}/{self.max_grasp_retries})'
-                )
+        self.get_logger().info('Sending pick target to manipulator (/arm/target_pick)...')
+        self.arm_pick_pub.publish(target_pt)
+        self._arm_cmd_sent = True
 
     # ========================= vision 话题回调：bin （place） =========================
 
@@ -523,43 +621,23 @@ class TaskManagerNodeV2(Node):
     def _execute_place_with_current_bin(self):
         """
         在 PLACE_IN_BIN 状态下，由 bin 话题回调触发。
-        这里调用实际放置动作（当前为占位实现）。
+        仅发送一次放置目标到 /arm/target_place（base_link 下毫米）；
+        成功/失败由定时器根据 /arm/status 异步判断并做状态转换。
         """
         if self.bin_pose is None:
             self.get_logger().error('PLACE_IN_BIN state but bin_pose is None!')
             return
+        if self._arm_cmd_sent:
+            return
 
-        self.get_logger().info('Calling place action (placeholder) with latest vision bin pose')
-        place_success = True  # TODO: 替换为真实放置动作
+        target_pt = self._get_point_in_base_link_mm(self.bin_pose)
+        if target_pt is None:
+            self.get_logger().warn('Place: cannot get target in base_link, skipping this cycle')
+            return
 
-        if place_success:
-            self.get_logger().info('Place succeeded!')
-            self.cargo_state = CargoState.EMPTY
-            self.place_retry_count = 0
-            self.adjust_nav2_for_carry_mode(False)
-            if self.bin_pose is not None:
-                self.bin_blacklist.append(self.bin_pose.pose.position)
-
-            # 放完：根据 explore_done_flag 判断后续逻辑
-            if self.explore_done_flag:
-                # 探索阶段已经结束 -> 继续兴趣点队列
-                self.current_state = TaskState.NAV_TO_INTEREST_POINT
-                self._nav_to_next_interest_point()
-            else:
-                # 探索未结束 -> 回到探索
-                self.current_state = TaskState.POST_ACTION
-                self._handle_post_action()
-        else:
-            self.place_retry_count += 1
-            if self.place_retry_count >= self.max_place_retries:
-                self.get_logger().warn('Place failed, max retries reached, resuming explore for bin')
-                self.place_retry_count = 0
-                self.current_state = TaskState.RESUME_EXPLORE_FOR_BIN
-                self._publish_explore_resume_if_changed(True)
-            else:
-                self.get_logger().info(
-                    f'Place failed, retrying ({self.place_retry_count}/{self.max_place_retries})'
-                )
+        self.get_logger().info('Sending place target to manipulator (/arm/target_place)...')
+        self.arm_place_pub.publish(target_pt)
+        self._arm_cmd_sent = True
 
     # ========================= 探索结束 & 地图兴趣点逻辑 =========================
 
