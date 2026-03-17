@@ -84,8 +84,6 @@ Using the given Leo Rover and the myCobot 280pi robotic arm, build a rover that 
 - ~~trying to connect to the nuc (by either hotspot or ethernet), try bypassing the need of inserting password for arm to connect to the nuc every power on.~~
 - ~~test on controlling gripper to grab and release the object.~~
 
-
-
 **Chassis navigation test**:
 
 - ~~setup the Nav2 and slam_toolbox on nuc and able to run tb3 demo.~~
@@ -99,3 +97,9 @@ Using the given Leo Rover and the myCobot 280pi robotic arm, build a rover that 
 **Mechanical design**:
 
 - ~~finished designing the first version of the chassis modification to connect the other components to the chassis.~~
+
+**system integration test**:
+
+- adding Error handling and recovery to the system.
+- adding restart or resume methods to system
+- adding external stop state where the system can be stopped and the state will be saved and can be resumed later.
