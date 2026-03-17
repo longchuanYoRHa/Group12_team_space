@@ -86,3 +86,66 @@ stateDiagram-v2
 - **EXPLORE → NAV_TO_INTEREST_POINT**：话题 `_explore_finished_callback`（explore/finished）+ 地图保存与兴趣点检测
 - **NAV_TO_INTEREST_POINT → WAIT_AT_INTEREST_POINT**：Nav2 `nav2_result_callback`（INTEREST_POINT）
 - **WAIT_AT_INTEREST_POINT → ***：`_object_point_callback` / `_bin_point_callback` 或定时器 `_handle_wait_at_interest_point_timeout()`
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant V as Vision(/target_pick/*,/target_place/*)
+    participant TM as TaskManagerV2
+    participant EX as ExploreNode(explore/resume, explore/finished)
+    participant TF as TF2
+    participant N2 as Nav2(navigate_to_pose)
+    participant ARM as Manipulator(/arm/*)
+
+    Note over TM: INIT
+    TM->>N2: wait_for_server()
+    TM->>TF: lookup(map<-base_link)
+    TM->>EX: publish explore/resume=True
+    Note over TM: EXPLORE
+
+    Note over V,TM: 发现物体（空载，稳定≥5帧）
+    V-->>TM: /target_pick/<color> (Point)
+    TM->>TF: lookup(map<-camera) & transform
+    TM->>EX: publish explore/resume=False
+    TM->>N2: send_goal(NavPurpose=OBJECT_PREGRASP)
+    Note over TM: NAV_TO_OBJECT_PREGRASP
+
+    N2-->>TM: result STATUS_SUCCEEDED
+    Note over TM: GRASP
+
+    Note over V,TM: 抓取触发（GRASP状态下用camera->base_link）
+    V-->>TM: /target_pick/<color> (Point)
+    TM->>TF: lookup(base_link<-camera) & transform(mm)
+    TM->>ARM: publish /arm/target_pick
+
+    ARM-->>TM: /arm/status=holding
+    ARM-->>TM: /arm/gripper_status=object_held
+    Note over TM: RESUME_EXPLORE_FOR_BIN
+    TM->>EX: publish explore/resume=True
+
+    Note over V,TM: 发现bin（载物，稳定≥5帧）
+    V-->>TM: /target_place/<color> (Point)
+    TM->>TF: lookup(map<-camera) & transform
+    TM->>EX: publish explore/resume=False
+    TM->>N2: send_goal(NavPurpose=BIN_PREPLACE)
+    Note over TM: NAV_TO_BIN_PREPLACE
+
+    N2-->>TM: result STATUS_SUCCEEDED
+    Note over TM: PLACE_IN_BIN
+
+    Note over V,TM: 放置触发（PLACE状态下用Pose->base_link）
+    V-->>TM: /target_place/<color> (Point)
+    TM->>TF: lookup(base_link<-map) & transform(mm)
+    TM->>ARM: publish /arm/target_place
+
+    ARM-->>TM: /arm/status=idle
+    alt explore_done_flag == false
+        Note over TM: POST_ACTION -> EXPLORE
+        TM->>EX: publish explore/resume=True
+    else explore_done_flag == true
+        Note over TM: NAV_TO_INTEREST_POINT
+        TM->>N2: send_goal(NavPurpose=INTEREST_POINT)
+        N2-->>TM: result STATUS_SUCCEEDED
+        Note over TM: WAIT_AT_INTEREST_POINT
+    end
+```
