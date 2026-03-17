@@ -13,10 +13,10 @@ import os
 def generate_launch_description():
     pkg_share = get_package_share_directory('my_cobot_control')
     
-    # RViz 配置文件
+    # RViz configuration file path
     rviz_config = os.path.join(pkg_share, 'rviz', 'mycobot_tf2.rviz')
     
-    # 包含主 launch 文件
+    # Include main launch file
     mycobot_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([
             PathJoinSubstitution([
@@ -27,7 +27,7 @@ def generate_launch_description():
         ])
     )
     
-    # RViz2 节点
+    # RViz2 Node
     rviz_node = Node(
         package='rviz2',
         executable='rviz2',

@@ -6,14 +6,9 @@ This launch file:
 1. Broadcasts static TF2 transforms for arm, and gripper
 2. Starts the TF2-enabled mycobot controller
 
-TF2 Frame Hierarchy (with use_camera_link=true):
+TF2 Frame Hierarchy:
 base_link (rover base)
-  └── camera_link
-      └── g_base (arm base)
-          └── joint1 -> ... -> joint6_flange -> gripper_tip
-
-TF2 Frame Hierarchy (with use_camera_link=false, default):
-base_link (rover base)
+  ├── camera_link
   └── g_base (arm base)
         └── joint1 -> ... -> joint6_flange -> gripper_tip
                     
@@ -23,15 +18,11 @@ Usage:
     
     # Development with GUI
     ros2 launch my_cobot_control mycobot_with_tf2.launch.py use_mock:=true
-    
-    # With camera_link TF chain
-    ros2 launch my_cobot_control mycobot_with_tf2.launch.py use_camera_link:=true
 
-    # Override base_link -> camera_link and camera_link -> g_base offsets
+    # Override base_link -> camera_link and base_link -> g_base offsets
     ros2 launch my_cobot_control mycobot_with_tf2.launch.py \
-        use_camera_link:=true \
         base_to_camera_x:=0.10 base_to_camera_z:=0.20 \
-        camera_to_arm_x:=0.0379 camera_to_arm_y:=0.0641 camera_to_arm_z:=-0.0486
+        base_x:=0.08399 base_y:=0.06494 base_z:=0.01097
 """
 
 from launch import LaunchDescription
@@ -65,17 +56,11 @@ def generate_launch_description():
         description='Use mock/GUI for joint states (true) or real hardware (false)'
     )
 
-    use_camera_link_arg = DeclareLaunchArgument(
-        'use_camera_link',
-        default_value='false',  # Default: base_link -> g_base directly
-        description='Use camera_link in TF tree (true: base_link->camera_link->g_base, false: base_link->g_base)'
-    )
-
     base_x_arg = DeclareLaunchArgument(
-        'base_x', default_value='0.06494',
+        'base_x', default_value='0.08399',
         description='Base-to-arm X offset for base_link->g_base (m)')
     base_y_arg = DeclareLaunchArgument(
-        'base_y', default_value='0.08399',
+        'base_y', default_value='0.06494',
         description='Base-to-arm Y offset for base_link->g_base (m)')
     base_z_arg = DeclareLaunchArgument(
         'base_z', default_value='0.01097',
@@ -91,42 +76,23 @@ def generate_launch_description():
         description='Base-to-arm yaw for base_link->g_base (rad)')
 
     base_to_camera_x_arg = DeclareLaunchArgument(
-        'base_to_camera_x', default_value='0.027',
+        'base_to_camera_x', default_value='0.14813',
         description='Base-to-camera X offset for base_link->camera_link (m)')
     base_to_camera_y_arg = DeclareLaunchArgument(
-        'base_to_camera_y', default_value='0.14813',
+        'base_to_camera_y', default_value='0.027',
         description='Base-to-camera Y offset for base_link->camera_link (m)')
     base_to_camera_z_arg = DeclareLaunchArgument(
         'base_to_camera_z', default_value='0.05957',
         description='Base-to-camera Z offset for base_link->camera_link (m)')
     base_to_camera_roll_arg = DeclareLaunchArgument(
-        'base_to_camera_roll', default_value='0.5236', # 30 degrees in radians
+        'base_to_camera_roll', default_value='1.9199', # 20 + 90 degrees in radians
         description='Base-to-camera roll for base_link->camera_link (rad)')
     base_to_camera_pitch_arg = DeclareLaunchArgument(
         'base_to_camera_pitch', default_value='0.0',
         description='Base-to-camera pitch for base_link->camera_link (rad)')
     base_to_camera_yaw_arg = DeclareLaunchArgument(
-        'base_to_camera_yaw', default_value='0.0',
+        'base_to_camera_yaw', default_value='1.5708', # 90 degrees in radians
         description='Base-to-camera yaw for base_link->camera_link (rad)')
-
-    camera_to_arm_x_arg = DeclareLaunchArgument(
-        'camera_to_arm_x', default_value='0.0379',
-        description='Camera-to-arm X offset for camera_link->g_base (m)')
-    camera_to_arm_y_arg = DeclareLaunchArgument(
-        'camera_to_arm_y', default_value='0.0641',
-        description='Camera-to-arm Y offset for camera_link->g_base (m)')
-    camera_to_arm_z_arg = DeclareLaunchArgument(
-        'camera_to_arm_z', default_value='-0.0486',
-        description='Camera-to-arm Z offset for camera_link->g_base (m)')
-    camera_to_arm_roll_arg = DeclareLaunchArgument(
-        'camera_to_arm_roll', default_value='0.0',
-        description='Camera-to-arm roll for camera_link->g_base (rad)')
-    camera_to_arm_pitch_arg = DeclareLaunchArgument(
-        'camera_to_arm_pitch', default_value='-0.5236',
-        description='Camera-to-arm pitch for camera_link->g_base (rad)')
-    camera_to_arm_yaw_arg = DeclareLaunchArgument(
-        'camera_to_arm_yaw', default_value='0.0',
-        description='Camera-to-arm yaw for camera_link->g_base (rad)')
 
     # ========================================================================
     # Robot State Publisher (Publish joint state in TF)
@@ -164,63 +130,41 @@ def generate_launch_description():
     )
 
     # ========================================================================
-    # Static TF: base_link -> camera_link (when use_camera_link=true)
+    # Static TF: base_link -> camera_link (default)
     # ========================================================================
     base_to_camera_tf = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
         name='base_to_camera_tf',
         arguments=[
-            LaunchConfiguration('base_to_camera_x'),
-            LaunchConfiguration('base_to_camera_y'),
-            LaunchConfiguration('base_to_camera_z'),
-            LaunchConfiguration('base_to_camera_roll'),
-            LaunchConfiguration('base_to_camera_pitch'),
-            LaunchConfiguration('base_to_camera_yaw'),
-            'base_link',
-            'camera_link'
+            '--x', LaunchConfiguration('base_to_camera_x'),
+            '--y', LaunchConfiguration('base_to_camera_y'),
+            '--z', LaunchConfiguration('base_to_camera_z'),
+            '--yaw', LaunchConfiguration('base_to_camera_yaw'),
+            '--pitch', LaunchConfiguration('base_to_camera_pitch'),
+            '--roll', LaunchConfiguration('base_to_camera_roll'),
+            '--frame-id', 'base_link',
+            '--child-frame-id', 'camera_link'
         ],
-        condition=IfCondition(LaunchConfiguration('use_camera_link'))
     )
 
     # ========================================================================
-    # Static TF: camera_link -> g_base (when use_camera_link=true)
-    # ========================================================================
-    camera_to_arm_tf = Node(
-        package='tf2_ros',
-        executable='static_transform_publisher',
-        name='camera_to_arm_tf',
-        arguments=[
-            LaunchConfiguration('camera_to_arm_x'),
-            LaunchConfiguration('camera_to_arm_y'),
-            LaunchConfiguration('camera_to_arm_z'),
-            LaunchConfiguration('camera_to_arm_roll'),
-            LaunchConfiguration('camera_to_arm_pitch'),
-            LaunchConfiguration('camera_to_arm_yaw'),
-            'camera_link',
-            'g_base'  # arm_base_link in URDF is g_base
-        ],
-        condition=IfCondition(LaunchConfiguration('use_camera_link'))
-    )
-
-    # ========================================================================
-    # Static TF: base_link -> g_base (when use_camera_link=false, default)
+    # Static TF: base_link -> g_base (default)
     # ========================================================================
     base_to_arm_tf = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
         name='base_to_arm_tf',
         arguments=[
-            LaunchConfiguration('base_x'),
-            LaunchConfiguration('base_y'),
-            LaunchConfiguration('base_z'),
-            LaunchConfiguration('base_roll'),
-            LaunchConfiguration('base_pitch'),
-            LaunchConfiguration('base_yaw'),
-            'base_link',
-            'g_base'
-        ],
-        condition=UnlessCondition(LaunchConfiguration('use_camera_link'))
+            '--x', LaunchConfiguration('base_x'),
+            '--y', LaunchConfiguration('base_y'),
+            '--z', LaunchConfiguration('base_z'),
+            '--yaw', LaunchConfiguration('base_yaw'),
+            '--pitch', LaunchConfiguration('base_pitch'),
+            '--roll', LaunchConfiguration('base_roll'),
+            '--frame-id', 'base_link',
+            '--child-frame-id', 'g_base'
+        ]
     )
 
     # ========================================================================
@@ -231,10 +175,14 @@ def generate_launch_description():
         executable='static_transform_publisher',
         name='gripper_tip_tf',
         arguments=[
-            '0.0', '0.0', '0.079',  # 34mm + 45mm
-            '0', '0', '0',
-            'joint6_flange',
-            'gripper_tip'
+            '--x', '0.0', 
+            '--y', '0.0', 
+            '--z', '0.079',  # 34mm + 45mm
+            '--yaw', '0.0', 
+            '--pitch', '0.0', 
+            '--roll', '0.0',
+            '--frame-id', 'joint6_flange',
+            '--child-frame-id', 'gripper_tip'
         ]
     )
 
@@ -247,6 +195,7 @@ def generate_launch_description():
         name='mycobot_controller',
         namespace='arm',
         output='screen',
+        emulate_tty=True,
         parameters=[{
             'camera_frame': 'camera_link',
             'arm_base_frame': 'g_base',  # Name in URDF
@@ -266,25 +215,21 @@ def generate_launch_description():
 
     return LaunchDescription([
         use_mock_arg,
-        use_camera_link_arg,
+
+        # Base to arm TF parameters (default)
         base_x_arg,
         base_y_arg,
         base_z_arg,
         base_roll_arg,
         base_pitch_arg,
         base_yaw_arg,
+        # Base to camera TF parameters (default)
         base_to_camera_x_arg,
         base_to_camera_y_arg,
         base_to_camera_z_arg,
         base_to_camera_roll_arg,
         base_to_camera_pitch_arg,
         base_to_camera_yaw_arg,
-        camera_to_arm_x_arg,
-        camera_to_arm_y_arg,
-        camera_to_arm_z_arg,
-        camera_to_arm_roll_arg,
-        camera_to_arm_pitch_arg,
-        camera_to_arm_yaw_arg,
         
         robot_state_publisher,
         # mock mode: manual control joint states via GUI
@@ -293,7 +238,6 @@ def generate_launch_description():
         joint_state_publisher,      
         
         base_to_camera_tf,
-        camera_to_arm_tf,
         base_to_arm_tf,
         gripper_tip_tf,
         

@@ -18,7 +18,7 @@ Publishes:
 
 TF2 Frames (static transforms from launch file):
   camera_link -> arm_base_link       (camera and arm both on rover)
-  joint6_flange -> gripper_base      (from URDF)
+  joint6_flange -> gripper_base      (from URDF)oint6_flange -> gripper_tip
   gripper_base -> gripper_tip        (gripper finger length)
 
 Note: If rover moves, navigation will provide map->rover_base transform,
@@ -606,12 +606,24 @@ class MyCobotControllerTF2(Node):
 
     def _publish_status(self):
         msg = String()
-        msg.data = self._state.name.lower()
+        # Simplify detailed state to basic status for NUC
+        if self._state == ArmState.IDLE:
+            msg.data = 'idle'
+        elif self._state == ArmState.HOLDING:
+            msg.data = 'holding'
+        elif self._state == ArmState.ERROR:
+            msg.data = 'error'
+        else:
+            msg.data = 'busy'
         self.status_pub.publish(msg)
 
     def _publish_gripper(self, text):
         msg = String()
-        msg.data = text
+        # Simplify gripper state for standard NUC processing
+        if text in ['object_held', 'unknown']:
+            msg.data = text
+        else:
+            msg.data = 'no_object'
         self.gripper_pub.publish(msg)
 
     def _publish_joint_states(self):

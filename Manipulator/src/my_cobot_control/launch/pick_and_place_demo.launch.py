@@ -13,7 +13,6 @@ from launch.substitutions import Command, LaunchConfiguration
 
 def generate_launch_description():
     res = []
-use english answer
     # URDF model
     model_launch_arg = DeclareLaunchArgument(
         name="model",
