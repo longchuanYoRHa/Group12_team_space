@@ -33,7 +33,9 @@ setup(
     entry_points={
         'console_scripts': [
             'task_manager = central_controller.task_manager:main',
-            'mock_arm_node = central_controller.mock_arm_node:main'
+            'mock_arm_node = central_controller.mock_arm_node:main',
+            'task_manager_v2 = central_controller.task_manager_node_v2:main',
+            'detect_objects_in_pgm_map = central_controller.detect_objects_in_pgm_map:main',
         ],
     },
 )

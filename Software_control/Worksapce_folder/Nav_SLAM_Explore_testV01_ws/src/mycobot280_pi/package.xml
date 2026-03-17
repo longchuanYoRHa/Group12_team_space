@@ -1,0 +1,21 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>mycobot280_pi</name>
+  <version>0.1.0</version>
+  <description>Gazebo simulation for MyCobot 280</description>
+  <maintainer email="tejas.mysorelakshmikanth@tu-dortmund.de">Tejas</maintainer>
+  <license>MIT</license>
+
+  <depend>ros_gz</depend>
+  <depend>ros2_control</depend>
+  <depend>ros2_controllers</depend>
+  <depend>xacro</depend>
+  <depend>mycobot_description</depend>
+  <exec_depend>trajectory_msgs</exec_depend>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

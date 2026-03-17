@@ -1,0 +1,219 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="leo_sim_with_lidar">
+
+  <!-- 1) directly include the official simulation xacro (without modifying the official file) -->
+  <xacro:include filename="$(find leo_description)/urdf/leo_sim.urdf.xacro"/>
+
+
+  <!-- 2) generate the official body
+       Note: if the official leo_sim.urdf.xacro itself is a complete robot, not a macro,
+       then after include, it has already generated the content, you don't need to call the macro. -->
+
+  <!-- 3) add a laser link (name use laser, consistent with your TF/SLAM习惯) -->
+  <link name="laser">
+    <inertial>
+      <mass value="0.15"/>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <inertia ixx="1e-4" ixy="0" ixz="0" iyy="1e-4" iyz="0" izz="1e-4"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <cylinder length="0.05" radius="0.01"/>
+      </geometry>
+      <material name="laser_material">
+        <color rgba="1 0 0 1"/>
+      </material>
+    </visual>
+  </link>
+
+  <!-- 4) fixed connection to base_link (pose use the previous one) -->
+  <joint name="base_to_laser" type="fixed">
+    <parent link="base_link"/>
+    <child link="laser"/>
+    <origin xyz="0.1758 0.0 -0.10553" rpy="3.14159 0 3.14159"/>
+  </joint>
+
+  <!-- D435i camera configuration (simplified version: only color and depth, no IMU) -->
+  <xacro:property name="M_PI" value="3.1415926535897931"/>
+  <xacro:property name="deg_to_rad" value="0.01745329251994329577"/>
+  
+  <!-- camera parameters (consistent with the original configuration) -->
+  <xacro:property name="color_width" value="1920"/>
+  <xacro:property name="color_height" value="1080"/>
+  <xacro:property name="color_fps" value="30"/>
+  <xacro:property name="color_fov" value="69.4"/>
+  
+  <xacro:property name="depth_width" value="1280"/>
+  <xacro:property name="depth_height" value="720"/>
+  <xacro:property name="depth_fps" value="30"/>
+  <xacro:property name="depth_fov" value="85.2"/>
+  
+  <!-- camera body link -->
+  <link name="D435i_camera_link">
+    <inertial>
+      <mass value="0.564"/>
+      <origin xyz="0 0 0"/>
+      <inertia ixx="0.003881243" ixy="0.0" ixz="0.0" iyy="0.000498940" iyz="0.0" izz="0.003879257"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.02505 0.090 0.025"/>
+      </geometry>
+      <material name="camera_aluminum">
+        <color rgba="0.5 0.5 0.5 1"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.02505 0.090 0.025"/>
+      </geometry>
+    </collision>
+  </link>
+  
+  <!-- camera installed to base_link -->
+  <joint name="base_to_D435i_camera" type="fixed">
+    <parent link="base_link"/>
+    <child link="D435i_camera_link"/>
+    <origin xyz="0.14813 -0.027 0.05957" rpy="0.0 0.0 0.0"/>
+  </joint>
+  
+  <!-- depth camera frame -->
+  <joint name="D435i_camera_depth_joint" type="fixed">
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <parent link="D435i_camera_link"/>
+    <child link="D435i_camera_depth_frame"/>
+  </joint>
+  <link name="D435i_camera_depth_frame"/>
+  
+  <joint name="D435i_camera_depth_optical_joint" type="fixed">
+    <origin xyz="0 0 0" rpy="${-M_PI/2} 0 ${-M_PI/2}"/>
+    <parent link="D435i_camera_depth_frame"/>
+    <child link="D435i_camera_depth_optical_frame"/>
+  </joint>
+  <link name="D435i_camera_depth_optical_frame"/>
+  
+  <!-- color camera frame -->
+  <joint name="D435i_camera_color_joint" type="fixed">
+    <origin xyz="0 0.015 0" rpy="0 0 0"/>
+    <parent link="D435i_camera_depth_frame"/>
+    <child link="D435i_camera_color_frame"/>
+  </joint>
+  <link name="D435i_camera_color_frame"/>
+  
+  <joint name="D435i_camera_color_optical_joint" type="fixed">
+    <origin xyz="0 0 0" rpy="${-M_PI/2} 0 ${-M_PI/2}"/>
+    <parent link="D435i_camera_color_frame"/>
+    <child link="D435i_camera_color_optical_frame"/>
+  </joint>
+  <link name="D435i_camera_color_optical_frame"/>
+  
+  <!-- Gazebo color camera sensor -->
+  <gazebo reference="D435i_camera_link">
+    <sensor name="D435i_camera_color" type="camera">
+      <camera>
+        <horizontal_fov>${color_fov * deg_to_rad}</horizontal_fov>
+        <image>
+          <width>${color_width}</width>
+          <height>${color_height}</height>
+          <format>RGB_INT8</format>
+        </image>
+        <clip>
+          <near>0.1</near>
+          <far>100</far>
+        </clip>
+        <noise>
+          <type>gaussian</type>
+          <mean>0.0</mean>
+          <stddev>0.007</stddev>
+        </noise>
+      </camera>
+      <always_on>true</always_on>
+      <update_rate>${color_fps}</update_rate>
+      <visualize>false</visualize>
+      <gz_frame_id>D435i_camera_color_optical_frame</gz_frame_id>
+      <topic>D435i_camera/color/image_raw</topic>
+    </sensor>
+  </gazebo>
+  
+  <!-- Gazebo depth camera sensor -->
+  <gazebo reference="D435i_camera_link">
+    <sensor name="D435i_camera_depth" type="depth_camera">
+      <camera>
+        <horizontal_fov>${depth_fov * deg_to_rad}</horizontal_fov>
+        <image>
+          <width>${depth_width}</width>
+          <height>${depth_height}</height>
+        </image>
+        <clip>
+          <near>0.1</near>
+          <far>10.0</far>
+        </clip>
+        <noise>
+          <type>gaussian</type>
+          <mean>0.0</mean>
+          <stddev>0.100</stddev>
+        </noise>
+      </camera>
+      <always_on>true</always_on>
+      <update_rate>${depth_fps}</update_rate>
+      <visualize>false</visualize>
+      <gz_frame_id>D435i_camera_depth_optical_frame</gz_frame_id>
+      <topic>D435i_camera/depth/image_raw</topic>
+    </sensor>
+  </gazebo>
+
+  <gazebo reference="D435i_camera_link">
+    <sensor name="boundingbox_camera" type="boundingbox_camera">
+         <topic>boxes</topic>
+         <camera>
+           <box_type>2d</box_type>
+           <horizontal_fov>1.047</horizontal_fov>
+           <image>
+             <width>800</width>
+             <height>600</height>
+           </image>
+           <clip>
+             <near>0.1</near>
+             <far>10</far>
+           </clip>
+         </camera>
+         <always_on>1</always_on>
+         <update_rate>30</update_rate>
+         <visualize>true</visualize>
+       </sensor>
+  </gazebo>
+
+  <!-- 5) gz-sim's Lidar sensor: URDF Gazebo extension written in <gazebo>
+       topic suggest use scan, finally bridge to ROS's /scan or <ns>/scan -->
+  <gazebo reference="laser">
+    <sensor name="lidar" type="gpu_lidar">
+      <always_on>true</always_on>
+      <update_rate>10</update_rate>
+      <visualize>true</visualize>
+
+      <!-- gz transport topic (use ros_gz_bridge to bridge) -->
+      <topic>scan</topic>
+
+      <ray>
+        <scan>
+          <horizontal>
+            <samples>720</samples>
+            <min_angle>-3.14159</min_angle>
+            <max_angle>3.14159</max_angle>
+          </horizontal>
+        </scan>
+        <range>
+          <min>0.12</min>
+          <max>12.0</max>
+        </range>
+      </ray>
+
+      <!-- very important: make the LaserScan header.frame_id = laser after bridging -->
+      <gz_frame_id>laser</gz_frame_id>
+    </sensor>
+  </gazebo>
+
+</robot>

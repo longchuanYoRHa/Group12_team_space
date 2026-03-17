@@ -27,6 +27,12 @@ try:
 except ImportError:
     _HAS_PIL = False
 
+try:
+    import yaml  # type: ignore
+    _HAS_YAML = True
+except ImportError:
+    _HAS_YAML = False
+
 # 地图语义（与 map_server 一致）
 FREE = 0
 # 占据：部分地图保存为 254 或 255，均视为障碍/物体
@@ -45,6 +51,47 @@ DEFAULT_ORIGIN = (0.0, 0.0)
 # 物体占位过滤：像素块面积范围（像素数），过滤噪声与过大的墙
 MIN_OBJECT_PIXELS = 10
 MAX_OBJECT_PIXELS = 2500
+
+
+def load_map_metadata_from_yaml(pgm_path: str) -> Optional[Tuple[float, Tuple[float, float]]]:
+    """
+    从与 pgm 同目录、同名的 map yaml 读取 (resolution, (origin_x, origin_y))。
+    注意：PGM 本身不包含原点信息，origin/resolution 只存在于 YAML。
+    """
+    yaml_path = str(Path(pgm_path).with_suffix(".yaml"))
+    if not Path(yaml_path).is_file():
+        return None
+
+    try:
+        if _HAS_YAML:
+            with open(yaml_path, "r", encoding="utf-8") as f:
+                data = yaml.safe_load(f)
+            res = float(data.get("resolution"))
+            origin = data.get("origin")
+            ox = float(origin[0])
+            oy = float(origin[1])
+            return res, (ox, oy)
+        # 无 PyYAML 时：做一个很窄的解析，只支持本项目的简单 yaml 行
+        res = None
+        origin = None
+        with open(yaml_path, "r", encoding="utf-8") as f:
+            for line in f:
+                s = line.strip()
+                if not s or s.startswith("#"):
+                    continue
+                if s.startswith("resolution:"):
+                    res = float(s.split(":", 1)[1].strip())
+                elif s.startswith("origin:"):
+                    rhs = s.split(":", 1)[1].strip()
+                    rhs = rhs.strip().lstrip("[").rstrip("]")
+                    parts = [p.strip() for p in rhs.split(",") if p.strip()]
+                    if len(parts) >= 2:
+                        origin = (float(parts[0]), float(parts[1]))
+        if res is None or origin is None:
+            return None
+        return float(res), (float(origin[0]), float(origin[1]))
+    except Exception:
+        return None
 
 
 def load_pgm(path: str) -> Tuple[int, int, List[int]]:
@@ -328,11 +375,17 @@ def _filter_one_component(
     area = len(comp)
     if area < min_pixels or area > max_pixels:
         return None
+    cx, cy = centroid_pixel(comp, w)
+    # 距离图像边界的像素 margin，过滤掉紧贴边缘的小块（通常是噪声或外轮廓碎片）
+    margin_px = 5
+    if cx < margin_px or cx > (w - 1 - margin_px):
+        return None
+    if cy < margin_px or cy > (h - 1 - margin_px):
+        return None
     if not touches_border(w, h, comp):
-        cx, cy = centroid_pixel(comp, w)
         return (cx, cy, area)
+    # 接触边界时：只有「边界大部分邻接白色」才视为物体（明显在白色中间的区块）
     if boundary_white_ratio(w, h, pixels, comp) >= white_ratio_min:
-        cx, cy = centroid_pixel(comp, w)
         return (cx, cy, area)
     return None
 
@@ -368,17 +421,28 @@ def find_enclosed_blobs_in_map(
 
 def get_interest_points_from_pgm(
     pgm_path: str,
-    resolution: float = DEFAULT_RESOLUTION,
-    origin: Tuple[float, float] = DEFAULT_ORIGIN,
+    resolution: Optional[float] = None,
+    origin: Optional[Tuple[float, float]] = None,
     min_pixels: int = 5,
     max_pixels: int = 500,
     non_white: bool = True,
     white_ratio_min: float = 0.4,
+    prefer_yaml: bool = True,
 ) -> List[Tuple[float, float]]:
     """
     从 PGM 地图中识别兴趣点，返回地图坐标系下的 (mx, my) 列表。
     供 task_manager 等节点调用，用于探索完成后基于地图的补检。
     """
+    # 自动从同名 yaml 读取 resolution/origin（PGM 不包含原点信息）
+    if prefer_yaml:
+        meta = load_map_metadata_from_yaml(pgm_path)
+        if meta is not None:
+            resolution, origin = meta
+    if resolution is None:
+        resolution = DEFAULT_RESOLUTION
+    if origin is None:
+        origin = DEFAULT_ORIGIN
+
     w, h, pixels = load_pgm(pgm_path)
     blobs = find_enclosed_blobs_in_map(
         w, h, pixels, min_pixels, max_pixels,
@@ -404,6 +468,9 @@ def run_detection_enclosed_blobs(
     no_plot: bool = False,
 ) -> None:
     """运行「白色中间有明显区块」识别，输出各区域中心坐标，并可选生成标注图。"""
+    meta = load_map_metadata_from_yaml(pgm_path)
+    if meta is not None:
+        resolution, origin = meta
     w, h, pixels = load_pgm(pgm_path)
     print(f"地图尺寸: {w} x {h}, 分辨率: {resolution} m/px, 原点: {origin}")
     print("识别目标: 白色中间有明显区块即视为物体（轮廓不必完全封闭）")

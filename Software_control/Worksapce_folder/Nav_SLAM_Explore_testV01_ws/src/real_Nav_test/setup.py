@@ -39,6 +39,9 @@ setup(
         'console_scripts': [
             'task_manager_node = real_Nav_test.task_manager_node:main',
             'approach_from_boxes_test_node = real_Nav_test.approach_from_boxes_test_node:main',
+            'example_vision_publisher = real_Nav_test.example_vision_publisher:main',
+            'task_manager_node_v2 = real_Nav_test.task_manager_node_v2:main',
+            'mock_arm_node = real_Nav_test.mock_arm_node:main',
         ],
     },
 )
