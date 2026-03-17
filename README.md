@@ -101,3 +101,5 @@ Using the given Leo Rover and the myCobot 280pi robotic arm, build a rover that 
 **system integration test**:
 
 - adding Error handling and recovery to the system.
+- adding restart or resume methods to system
+- adding external stop state where the system can be stopped and the state will be saved and can be resumed later.
