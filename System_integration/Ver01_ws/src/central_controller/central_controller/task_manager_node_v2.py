@@ -5,7 +5,7 @@ Task manager state machine node V2 (topic-driven).
 基于 task_manager_node.py 的 V1 版本重构：
 - 使用视觉话题回调作为主要驱动（完全 topic 驱动）
 - 在 object/bin 话题回调中直接完成：暂停/恢复探索、发送 Nav2 目标、设置 done callback 完成状态转换
-- 取消 PRECISION_ALIGN_OBJECT 状态；PRECISION_ALIGN_BIN 也简化为直接 place
+- 增加 PRECISION_ALIGN：在 Nav2 到达预位后，视觉触发关闭 local inflation 并用 /cmd_vel 做慢速对位
 - 探索结束后的地图检测与兴趣点导航逻辑保持不变，但移动到 explore_finished 回调里
 """
 
@@ -26,6 +26,8 @@ import geometry_msgs.msg as geometry_msgs
 import nav2_msgs.action as nav2_msgs
 import std_msgs.msg as std_msgs
 from std_srvs.srv import Trigger
+from rclpy.parameter_client import AsyncParameterClient
+from rclpy.parameter import Parameter
 
 from central_controller.task_manager_utils import (
     is_pose_in_blacklist as check_pose_in_blacklist,
@@ -47,10 +49,12 @@ class TaskState(Enum):
     INIT = "init"
     EXPLORE = "explore"
     NAV_TO_OBJECT_PREGRASP = "nav_to_object_pregrasp"
+    PRECISION_ALIGN = "precision_align"
     GRASP = "grasp"
     RESUME_EXPLORE_FOR_BIN = "resume_explore_for_bin"
     NAV_TO_BIN_PREPLACE = "nav_to_bin_preplace"
     PLACE_IN_BIN = "place_in_bin"
+    BACKUP_AFTER_ACTION = "backup_after_action"
     POST_ACTION = "post_action"
     EXPLORE_FINISHED_FALLBACK = "explore_finished_fallback"
     RUN_MAP_DETECTION = "run_map_detection"
@@ -171,19 +175,29 @@ class TaskManagerNodeV2(Node):
         self.tf_buffer = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
 
-        # ========== 定时器：只负责发布状态 & WAIT_AT_INTEREST_POINT 超时 ==========
+        # ========== 定时器：发布状态、处理异步状态（对位/后退/超时） ==========
         self.state_timer = self.create_timer(0.1, self._state_timer_callback)
 
         # ========== 参数 ==========
         self.declare_parameter('pregrasp_distance', 0.5)
         self.declare_parameter('preplace_distance', 0.6)
-        self.declare_parameter('camera_frame_id', 'camera_depth_optical_frame')
+        self.declare_parameter('camera_frame_id', 'D435i_camera_link') # change to 'D435i_camera_link' for simulation
         self.declare_parameter('maps_directory', '')
         self.declare_parameter('map_save_basename', 'explore_complete')
         self.declare_parameter('map_resolution', DEFAULT_RESOLUTION)
         self.declare_parameter('map_origin_x', DEFAULT_ORIGIN[0])
         self.declare_parameter('map_origin_y', DEFAULT_ORIGIN[1])
         self.declare_parameter('wait_at_interest_point_sec', 15.0)
+        # 精确对位（diffdrive docking）参数
+        self.declare_parameter('docking_linear_speed_mps', 0.005)  # 0.5 cm/s
+        self.declare_parameter('docking_angular_speed_max_rps', 0.25)
+        self.declare_parameter('docking_yaw_kp', 1.5)
+        self.declare_parameter('docking_y_tolerance_m', 0.01)
+        self.declare_parameter('docking_stop_distance_m', 0.20)
+        self.declare_parameter('backup_distance_m', 0.20)
+        # local costmap inflation 临时关闭（通过参数写入）
+        self.declare_parameter('local_costmap_node_fqn', '/local_costmap/local_costmap')
+        self.declare_parameter('local_inflation_radius_off', 0.0)
 
         # ========== Service：查询当前状态 ==========
         self.state_service = self.create_service(
@@ -193,6 +207,24 @@ class TaskManagerNodeV2(Node):
         )
 
         self.get_logger().info('Task manager V2 node initialized')
+
+        # ========== cmd_vel & costmap 参数客户端 ==========
+        self.cmd_vel_pub = self.create_publisher(geometry_msgs.Twist, '/cmd_vel', 10)
+        self._param_client_local_costmap = AsyncParameterClient(
+            self, self.get_parameter('local_costmap_node_fqn').value
+        )
+        self._local_inflation_radius_saved = None
+        self._local_inflation_temporarily_off = False
+
+        # ========== 精确对位状态变量 ==========
+        self._precision_align_source_purpose = NavPurpose.NONE
+        self._precision_align_next_state = None  # TaskState
+        self._docking_active = False
+        self._docking_phase = 'rotate'  # 'rotate' -> 'drive'
+        self._last_docking_target_base_m = None  # (x, y) in meters (base_link)
+        self._backup_end_time = None
+        self._backup_next_state = None  # TaskState
+        self._backup_after_restore_explore_resume = None  # bool | None
 
     # ========================= 通用工具函数 =========================
 
@@ -339,15 +371,14 @@ class TaskManagerNodeV2(Node):
         if status == GoalStatus.STATUS_SUCCEEDED:
             self.get_logger().info(f'Nav2 goal succeeded ({purpose.value})')
             if purpose == NavPurpose.OBJECT_PREGRASP:
-                # 到达物体预抓取位 -> 进入 GRASP，之后由 object 话题回调触发实际抓取
-                self.current_state = TaskState.GRASP
+                # 到达物体预抓取位 -> 进入精确对位，视觉触发对位后再进入 GRASP
+                self._enter_precision_align(purpose, next_state_after_align=TaskState.GRASP)
             elif purpose == NavPurpose.BIN_PREPLACE:
-                # 到达 bin 预放置位 -> 进入 PLACE_IN_BIN，之后由 bin 话题回调触发实际放置
-                self.current_state = TaskState.PLACE_IN_BIN
+                # 到达 bin 预放置位 -> 进入精确对位，视觉触发对位后再进入 PLACE_IN_BIN
+                self._enter_precision_align(purpose, next_state_after_align=TaskState.PLACE_IN_BIN)
             elif purpose == NavPurpose.INTEREST_POINT:
-                # 到达兴趣点 -> 进入等待视觉检测
-                self.current_state = TaskState.WAIT_AT_INTEREST_POINT
-                self.wait_at_point_start_time = time.monotonic()
+                # 到达兴趣点 -> 进入精确对位状态（替代 WAIT_AT_INTEREST_POINT 等待）
+                self._enter_precision_align(purpose, next_state_after_align=None)
         elif status == GoalStatus.STATUS_ABORTED:
             self.get_logger().warn(f'Nav2 goal aborted ({purpose.value})')
         elif status == GoalStatus.STATUS_CANCELED:
@@ -374,8 +405,10 @@ class TaskManagerNodeV2(Node):
             self.grasp_retry_count = 0
             self.adjust_nav2_for_carry_mode(True)
             self._arm_cmd_sent = False
-            self.current_state = TaskState.RESUME_EXPLORE_FOR_BIN
-            self._start_bin_search_or_go_to_cached()
+            self._start_backup_after_action(
+                next_state=TaskState.RESUME_EXPLORE_FOR_BIN,
+                explore_resume_after_restore=True,
+            )
             return
 
         if self.arm_status == 'error' or (self.arm_status == 'idle' and self._arm_cmd_sent):
@@ -407,11 +440,15 @@ class TaskManagerNodeV2(Node):
             if self.bin_pose is not None:
                 self.bin_blacklist.append(self.bin_pose.pose.position)
             if self.explore_done_flag:
-                self.current_state = TaskState.NAV_TO_INTEREST_POINT
-                self._nav_to_next_interest_point()
+                self._start_backup_after_action(
+                    next_state=TaskState.NAV_TO_INTEREST_POINT,
+                    explore_resume_after_restore=None,
+                )
             else:
-                self.current_state = TaskState.POST_ACTION
-                self._handle_post_action()
+                self._start_backup_after_action(
+                    next_state=TaskState.POST_ACTION,
+                    explore_resume_after_restore=True,
+                )
             return
 
         if self.arm_status == 'error':
@@ -472,6 +509,15 @@ class TaskManagerNodeV2(Node):
         if self.current_state == TaskState.PLACE_IN_BIN and self._arm_cmd_sent:
             self._handle_place_arm_result()
 
+        # PRECISION_ALIGN：对位控制循环 & 超时等待（兴趣点）
+        if self.current_state == TaskState.PRECISION_ALIGN:
+            self._precision_align_control_step()
+            self._handle_precision_align_timeout_if_needed()
+
+        # BACKUP_AFTER_ACTION：后退 20cm，结束后恢复 costmap 并进入下一状态
+        if self.current_state == TaskState.BACKUP_AFTER_ACTION:
+            self._backup_control_step()
+
         # WAIT_AT_INTEREST_POINT 的超时逻辑
         if self.current_state == TaskState.WAIT_AT_INTEREST_POINT:
             self._handle_wait_at_interest_point_timeout()
@@ -491,6 +537,11 @@ class TaskManagerNodeV2(Node):
         # 只有空载时才考虑新的抓取目标
         if self.cargo_state != CargoState.EMPTY:
             self.object_detection_count = 0
+            return
+
+        # 精确对位状态：由视觉触发 docking（不再做地图导航）
+        if self.current_state == TaskState.PRECISION_ALIGN:
+            self._handle_precision_align_vision(point_msg=msg, is_object=True)
             return
 
         # 已在前往预抓取位时不再更新目标，防止重复发送 goal
@@ -604,6 +655,11 @@ class TaskManagerNodeV2(Node):
         # PLACE_IN_BIN 状态：使用视觉信息执行放置（不再导航）
         if self.current_state == TaskState.PLACE_IN_BIN and self.cargo_state == CargoState.HAS_OBJECT:
             self._execute_place_with_current_bin()
+            return
+
+        # 精确对位状态：由视觉触发 docking（不再做地图导航）
+        if self.current_state == TaskState.PRECISION_ALIGN:
+            self._handle_precision_align_vision(point_msg=msg, is_object=False)
             return
 
         # 只有载有物体时才会去 bin
@@ -815,6 +871,247 @@ class TaskManagerNodeV2(Node):
         self.wait_at_point_start_time = None
         self.current_state = TaskState.NAV_TO_INTEREST_POINT
         self._nav_to_next_interest_point()
+
+    # ========================= 精确对位（diffdrive docking） =========================
+
+    def _enter_precision_align(self, source_purpose: NavPurpose, next_state_after_align):
+        """
+        在 Nav2 done callback 中调用：
+        - OBJECT_PREGRASP / BIN_PREPLACE：进入精确对位，完成后进入 GRASP / PLACE_IN_BIN
+        - INTEREST_POINT：进入精确对位（替代 WAIT），完成后根据检测到的目标进入 GRASP / PLACE_IN_BIN
+        """
+        self.current_state = TaskState.PRECISION_ALIGN
+        self._precision_align_source_purpose = source_purpose
+        self._precision_align_next_state = next_state_after_align
+        self._docking_active = False
+        self._docking_phase = 'rotate'
+        self._last_docking_target_base_m = None
+        self.wait_at_point_start_time = time.monotonic()
+        self.get_logger().info(
+            f'Entered PRECISION_ALIGN (source={source_purpose.value}); waiting for vision trigger.'
+        )
+
+    def _handle_precision_align_timeout_if_needed(self):
+        """
+        仅当精确对位接在 NAV_TO_INTEREST_POINT 后（作为 WAIT 替代）时启用超时跳点逻辑。
+        """
+        if self._precision_align_source_purpose != NavPurpose.INTEREST_POINT:
+            return
+        duration = self.get_parameter('wait_at_interest_point_sec').value
+        if self.wait_at_point_start_time is None:
+            self.wait_at_point_start_time = time.monotonic()
+            return
+        if (time.monotonic() - self.wait_at_point_start_time) < duration:
+            return
+
+        # 超时：与 WAIT_AT_INTEREST_POINT 一致，标记该兴趣点失败并跳下一个
+        if self.current_interest_point is not None:
+            p = geometry_msgs.Point()
+            p.x = self.current_interest_point[0]
+            p.y = self.current_interest_point[1]
+            p.z = 0.0
+            self.object_blacklist.append(p)
+            self.get_logger().info('No vision trigger in PRECISION_ALIGN within timeout; mark and skip.')
+
+        self._stop_cmd_vel()
+        self._docking_active = False
+        self._docking_phase = 'rotate'
+        self._last_docking_target_base_m = None
+
+        self.interest_point_index += 1
+        self.current_interest_point = None
+        self.wait_at_point_start_time = None
+        self.current_state = TaskState.NAV_TO_INTEREST_POINT
+        self._nav_to_next_interest_point()
+
+    def _handle_precision_align_vision(self, point_msg: geometry_msgs.Point, is_object: bool):
+        """
+        在 PRECISION_ALIGN 状态下由 vision 回调触发：
+        - 临时关闭 local costmap inflation（等效于“关掉 costmap 膨胀影响”）
+        - 记录目标在 base_link 下的位置并启动 diffdrive docking 控制
+        - 对位达标后切入下一状态（GRASP / PLACE_IN_BIN）
+        """
+        # 根据载荷状态决定当前应该响应 object 还是 bin
+        if is_object and self.cargo_state != CargoState.EMPTY:
+            return
+        if (not is_object) and self.cargo_state != CargoState.HAS_OBJECT:
+            return
+
+        target_mm = self._point_camera_to_base_link_mm(point_msg)
+        if target_mm is None:
+            return
+        target_m = (target_mm.x / 1000.0, target_mm.y / 1000.0)
+        self._last_docking_target_base_m = target_m
+
+        # 在兴趣点触发时，下一状态由目标类型决定（替代 WAIT_AT_INTEREST_POINT 的功能）
+        if self._precision_align_source_purpose == NavPurpose.INTEREST_POINT:
+            self._precision_align_next_state = TaskState.GRASP if is_object else TaskState.PLACE_IN_BIN
+
+        if not self._docking_active:
+            self.get_logger().info('PRECISION_ALIGN: vision trigger received, disabling inflation and start docking.')
+            self._disable_local_inflation_if_needed()
+            self._docking_active = True
+            self._docking_phase = 'rotate'
+
+    def _precision_align_control_step(self):
+        if not self._docking_active or self._last_docking_target_base_m is None:
+            return
+
+        x_m, y_m = self._last_docking_target_base_m
+        stop_dist = float(self.get_parameter('docking_stop_distance_m').value)
+        dist = (x_m * x_m + y_m * y_m) ** 0.5
+
+        if dist <= stop_dist:
+            self.get_logger().info(f'PRECISION_ALIGN: reached stop distance ({dist:.3f} m).')
+            self._stop_cmd_vel()
+            self._docking_active = False
+
+            # 对位达标 -> 进入下一状态（不在此处恢复 costmap，等待机械臂动作后统一恢复）
+            if self._precision_align_next_state is not None:
+                self.current_state = self._precision_align_next_state
+                self._arm_cmd_sent = False  # 确保下一状态能触发一次机械臂命令
+            else:
+                # 理论上不会发生：OBJECT/BIN 预位都传入 next_state
+                self.get_logger().warn('PRECISION_ALIGN: next state is None; staying in PRECISION_ALIGN.')
+            return
+
+        y_tol = float(self.get_parameter('docking_y_tolerance_m').value)
+        kp_yaw = float(self.get_parameter('docking_yaw_kp').value)
+        wz_max = float(self.get_parameter('docking_angular_speed_max_rps').value)
+        v_lin = float(self.get_parameter('docking_linear_speed_mps').value)
+
+        twist = geometry_msgs.Twist()
+
+        # 先原地调整左右（通过转向把目标 y 收敛到 0）
+        if self._docking_phase == 'rotate':
+            if abs(y_m) <= y_tol:
+                self._docking_phase = 'drive'
+                self._stop_cmd_vel()
+                return
+            wz = kp_yaw * y_m
+            wz = max(-wz_max, min(wz_max, wz))
+            twist.angular.z = wz
+            twist.linear.x = 0.0
+            self.cmd_vel_pub.publish(twist)
+            return
+
+        # 后直行：尽量缓慢前进；若横向误差又变大，回到 rotate
+        if abs(y_m) > (2.0 * y_tol):
+            self._docking_phase = 'rotate'
+            self._stop_cmd_vel()
+            return
+
+        twist.linear.x = max(0.0, min(v_lin, v_lin))
+        twist.angular.z = 0.0
+        self.cmd_vel_pub.publish(twist)
+
+    def _start_backup_after_action(self, next_state: TaskState, explore_resume_after_restore):
+        """
+        机械臂完成动作后：
+        - 先后退固定距离（默认 20cm）
+        - 再恢复 costmap inflation
+        - 进入下一状态（并按需恢复探索）
+        """
+        backup_dist = float(self.get_parameter('backup_distance_m').value)
+        v_lin = float(self.get_parameter('docking_linear_speed_mps').value)
+        v_lin = max(1e-4, abs(v_lin))
+        duration = backup_dist / v_lin
+
+        self._backup_end_time = time.monotonic() + duration
+        self._backup_next_state = next_state
+        self._backup_after_restore_explore_resume = explore_resume_after_restore
+        self.current_state = TaskState.BACKUP_AFTER_ACTION
+        self.get_logger().info(f'BACKUP_AFTER_ACTION: backing up {backup_dist:.2f} m for {duration:.1f} s.')
+
+    def _backup_control_step(self):
+        if self._backup_end_time is None:
+            return
+
+        now = time.monotonic()
+        if now >= self._backup_end_time:
+            self._stop_cmd_vel()
+            self._backup_end_time = None
+
+            # 恢复 costmap inflation（若曾关闭）
+            self._restore_local_inflation_if_needed()
+
+            # 进入下一状态
+            next_state = self._backup_next_state
+            self._backup_next_state = None
+            self.current_state = next_state
+
+            # 进入下一状态后额外动作
+            if next_state == TaskState.RESUME_EXPLORE_FOR_BIN:
+                self._start_bin_search_or_go_to_cached()
+            elif next_state == TaskState.NAV_TO_INTEREST_POINT:
+                self._nav_to_next_interest_point()
+            elif next_state == TaskState.POST_ACTION:
+                self._handle_post_action()
+
+            # 恢复探索控制（如需要）
+            if self._backup_after_restore_explore_resume is not None:
+                self._publish_explore_resume_if_changed(bool(self._backup_after_restore_explore_resume))
+            self._backup_after_restore_explore_resume = None
+            return
+
+        # 持续后退
+        v_lin = float(self.get_parameter('docking_linear_speed_mps').value)
+        twist = geometry_msgs.Twist()
+        twist.linear.x = -abs(v_lin)
+        twist.angular.z = 0.0
+        self.cmd_vel_pub.publish(twist)
+
+    def _stop_cmd_vel(self):
+        twist = geometry_msgs.Twist()
+        twist.linear.x = 0.0
+        twist.linear.y = 0.0
+        twist.linear.z = 0.0
+        twist.angular.x = 0.0
+        twist.angular.y = 0.0
+        twist.angular.z = 0.0
+        self.cmd_vel_pub.publish(twist)
+
+    def _disable_local_inflation_if_needed(self):
+        if self._local_inflation_temporarily_off:
+            return
+
+        # 若尚未拿到原始值，先尝试读取
+        if self._local_inflation_radius_saved is None:
+            try:
+                fut = self._param_client_local_costmap.get_parameters(['inflation_layer.inflation_radius'])
+                rclpy.spin_until_future_complete(self, fut, timeout_sec=0.5)
+                params = fut.result()
+                if params and params[0].type_ != Parameter.Type.NOT_SET:
+                    self._local_inflation_radius_saved = float(params[0].value)
+            except Exception:
+                pass
+
+        off_val = float(self.get_parameter('local_inflation_radius_off').value)
+        try:
+            fut = self._param_client_local_costmap.set_parameters(
+                [Parameter('inflation_layer.inflation_radius', Parameter.Type.DOUBLE, off_val)]
+            )
+            rclpy.spin_until_future_complete(self, fut, timeout_sec=0.5)
+            self._local_inflation_temporarily_off = True
+        except Exception as e:
+            self.get_logger().warn(f'Failed to disable local inflation via params: {e}')
+
+    def _restore_local_inflation_if_needed(self):
+        if not self._local_inflation_temporarily_off:
+            return
+        if self._local_inflation_radius_saved is None:
+            # 没有保存值时，至少恢复为 yaml 默认常见值
+            self._local_inflation_radius_saved = 0.11
+
+        try:
+            fut = self._param_client_local_costmap.set_parameters(
+                [Parameter('inflation_layer.inflation_radius', Parameter.Type.DOUBLE, float(self._local_inflation_radius_saved))]
+            )
+            rclpy.spin_until_future_complete(self, fut, timeout_sec=0.5)
+        except Exception as e:
+            self.get_logger().warn(f'Failed to restore local inflation via params: {e}')
+        finally:
+            self._local_inflation_temporarily_off = False
 
     # ========================= bin 搜索辅助逻辑 =========================
 
