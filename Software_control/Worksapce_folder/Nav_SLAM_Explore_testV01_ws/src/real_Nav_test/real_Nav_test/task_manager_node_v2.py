@@ -725,16 +725,11 @@ class TaskManagerNodeV2(Node):
             self.get_logger().error(f'PGM not found at {pgm_path}; cannot run interest point detection.')
             return
 
-        resolution = self.get_parameter('map_resolution').value
-        origin = (
-            self.get_parameter('map_origin_x').value,
-            self.get_parameter('map_origin_y').value,
-        )
         try:
             raw_points = get_interest_points_from_pgm(
                 pgm_path,
-                resolution=resolution,
-                origin=origin,
+                # 自动读取同名 yaml 的 origin/resolution（PGM 不包含原点信息）
+                prefer_yaml=True,
             )
         except Exception as e:
             self.get_logger().error(f'PGM detection failed: {e}; returning to EXPLORE.')

@@ -41,7 +41,7 @@ class VisionObjectPublisher(Node):
             "red_cube": self.create_publisher(Point, '/target_pick/red', 10),
             "red_bin": self.create_publisher(Point, '/target_place/red', 10),
         }
-        
+    
         # 相机坐标系名称
         # 根据你的实际相机配置选择：
         # - D435i_camera_color_optical_frame (RGB相机光学坐标系，推荐用于2D检测)

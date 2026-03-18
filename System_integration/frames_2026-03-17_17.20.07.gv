@@ -1,0 +1,25 @@
+digraph G {
+"map" -> "odom"[label=" Broadcaster: default_authority\nAverage rate: 10.217\nBuffer length: 4.6\nMost recent transform: 1451.6\nOldest transform: 1447.0\n"];
+"odom" -> "base_footprint"[label=" Broadcaster: default_authority\nAverage rate: 20.215\nBuffer length: 4.65\nMost recent transform: 1451.5\nOldest transform: 1446.85\n"];
+"base_link" -> "rocker_L_link"[label=" Broadcaster: default_authority\nAverage rate: 20.282\nBuffer length: 3.55\nMost recent transform: 1451.5\nOldest transform: 1447.95\n"];
+"base_footprint" -> "base_link"[label=" Broadcaster: default_authority\nAverage rate: 10000.0\nBuffer length: 0.0\nMost recent transform: 0.0\nOldest transform: 0.0\n"];
+"base_link" -> "rocker_R_link"[label=" Broadcaster: default_authority\nAverage rate: 20.282\nBuffer length: 3.55\nMost recent transform: 1451.5\nOldest transform: 1447.95\n"];
+"rocker_L_link" -> "wheel_FL_link"[label=" Broadcaster: default_authority\nAverage rate: 20.282\nBuffer length: 3.55\nMost recent transform: 1451.5\nOldest transform: 1447.95\n"];
+"rocker_R_link" -> "wheel_FR_link"[label=" Broadcaster: default_authority\nAverage rate: 20.282\nBuffer length: 3.55\nMost recent transform: 1451.5\nOldest transform: 1447.95\n"];
+"rocker_L_link" -> "wheel_RL_link"[label=" Broadcaster: default_authority\nAverage rate: 20.282\nBuffer length: 3.55\nMost recent transform: 1451.5\nOldest transform: 1447.95\n"];
+"rocker_R_link" -> "wheel_RR_link"[label=" Broadcaster: default_authority\nAverage rate: 20.282\nBuffer length: 3.55\nMost recent transform: 1451.5\nOldest transform: 1447.95\n"];
+"D435i_camera_depth_frame" -> "D435i_camera_color_frame"[label=" Broadcaster: default_authority\nAverage rate: 10000.0\nBuffer length: 0.0\nMost recent transform: 0.0\nOldest transform: 0.0\n"];
+"D435i_camera_link" -> "D435i_camera_depth_frame"[label=" Broadcaster: default_authority\nAverage rate: 10000.0\nBuffer length: 0.0\nMost recent transform: 0.0\nOldest transform: 0.0\n"];
+"D435i_camera_color_frame" -> "D435i_camera_color_optical_frame"[label=" Broadcaster: default_authority\nAverage rate: 10000.0\nBuffer length: 0.0\nMost recent transform: 0.0\nOldest transform: 0.0\n"];
+"base_link" -> "D435i_camera_link"[label=" Broadcaster: default_authority\nAverage rate: 10000.0\nBuffer length: 0.0\nMost recent transform: 0.0\nOldest transform: 0.0\n"];
+"D435i_camera_depth_frame" -> "D435i_camera_depth_optical_frame"[label=" Broadcaster: default_authority\nAverage rate: 10000.0\nBuffer length: 0.0\nMost recent transform: 0.0\nOldest transform: 0.0\n"];
+"base_link" -> "antenna_link"[label=" Broadcaster: default_authority\nAverage rate: 10000.0\nBuffer length: 0.0\nMost recent transform: 0.0\nOldest transform: 0.0\n"];
+"base_link" -> "laser"[label=" Broadcaster: default_authority\nAverage rate: 10000.0\nBuffer length: 0.0\nMost recent transform: 0.0\nOldest transform: 0.0\n"];
+"base_link" -> "camera_frame"[label=" Broadcaster: default_authority\nAverage rate: 10000.0\nBuffer length: 0.0\nMost recent transform: 0.0\nOldest transform: 0.0\n"];
+"camera_frame" -> "camera_optical_frame"[label=" Broadcaster: default_authority\nAverage rate: 10000.0\nBuffer length: 0.0\nMost recent transform: 0.0\nOldest transform: 0.0\n"];
+"base_link" -> "imu_frame"[label=" Broadcaster: default_authority\nAverage rate: 10000.0\nBuffer length: 0.0\nMost recent transform: 0.0\nOldest transform: 0.0\n"];
+edge [style=invis];
+ subgraph cluster_legend { style=bold; color=black; label ="view_frames Result";
+"Recorded at time: 1773768007.0537887"[ shape=plaintext ] ;
+}->"map";
+}

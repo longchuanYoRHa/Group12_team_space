@@ -628,26 +628,26 @@
       <self_collide>false</self_collide>
     </model>
     <model name='cylinder'>
-      <pose>2.2766001224517822 4.806610107421875 0.14999900273846251 -2.6870003759749e-18 -2.4359249919411087e-18 -9.0320078906682684e-21</pose>
-      <link name='cylinder_link'>
+      <!-- Replaced former cylinder with a 20x20x20 box -->
+      <pose>2.2766001224517822 4.806610107421875 0.1 0 0 0</pose>
+      <link name='cube20_link'>
         <inertial>
+          <mass>1</mass>
           <inertia>
-            <ixx>0.14499999999999999</ixx>
+            <ixx>66.666666666666671</ixx>
             <ixy>0</ixy>
             <ixz>0</ixz>
-            <iyy>0.14499999999999999</iyy>
+            <iyy>66.666666666666671</iyy>
             <iyz>0</iyz>
-            <izz>0.125</izz>
+            <izz>66.666666666666671</izz>
           </inertia>
-          <mass>1</mass>
           <pose>0 0 0 0 0 0</pose>
         </inertial>
-        <collision name='cylinder_collision'>
+        <collision name='cube20_collision'>
           <geometry>
-            <cylinder>
-              <radius>0.20000000000000001</radius>
-              <length>0.29999999999999999</length>
-            </cylinder>
+            <box>
+              <size>0.2 0.2 0.2</size>
+            </box>
           </geometry>
           <surface>
             <friction>
@@ -657,12 +657,11 @@
             <contact/>
           </surface>
         </collision>
-        <visual name='cylinder_visual'>
+        <visual name='cube20_visual'>
           <geometry>
-            <cylinder>
-              <radius>0.20000000000000001</radius>
-              <length>0.29999999999999999</length>
-            </cylinder>
+            <box>
+              <size>0.2 0.2 0.2</size>
+            </box>
           </geometry>
           <material>
             <ambient>0.300000012 0.300000012 0.300000012 1</ambient>
@@ -676,8 +675,47 @@
         <pose>0 0 0 0 0 0</pose>
         <enable_wind>false</enable_wind>
       </link>
+
       <static>false</static>
       <self_collide>false</self_collide>
+    </model>
+
+    <!-- Separate model so it can be picked up and re-placed -->
+    <model name='red_cube'>
+      <pose>2.2766001224517822 4.806610107421875 0.21 0 0 0</pose>
+      <link name='link'>
+        <inertial>
+          <mass>0.01</mass>
+          <inertia>
+            <ixx>6.6666666666666675e-07</ixx>
+            <ixy>0</ixy>
+            <ixz>0</ixz>
+            <iyy>6.6666666666666675e-07</iyy>
+            <iyz>0</iyz>
+            <izz>6.6666666666666675e-07</izz>
+          </inertia>
+        </inertial>
+        <collision name='collision'>
+          <geometry>
+            <box>
+              <size>0.02 0.02 0.02</size>
+            </box>
+          </geometry>
+        </collision>
+        <visual name='visual'>
+          <geometry>
+            <box>
+              <size>0.02 0.02 0.02</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>1 0 0 1</ambient>
+            <diffuse>1 0 0 1</diffuse>
+            <specular>0.2 0.2 0.2 1</specular>
+          </material>
+        </visual>
+      </link>
+      <static>false</static>
     </model>
     <light name='sun' type='directional'>
       <pose>0 0 10 0 0 0</pose>

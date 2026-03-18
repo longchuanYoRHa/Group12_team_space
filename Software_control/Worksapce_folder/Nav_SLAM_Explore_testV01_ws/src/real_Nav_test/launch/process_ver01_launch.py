@@ -213,13 +213,14 @@ def generate_launch_description():
     # 7. Launch Task Manager State Machine Node
     task_manager_node = Node(
         package='real_Nav_test',
-        executable='task_manager_node',
+        # executable='task_manager_node',
+        executable='task_manager_node_v2',
         name='task_manager',
         output='screen',
         parameters=[{
             'pregrasp_distance': 0.5,
             'preplace_distance': 0.6,
-            'camera_frame_id': 'camera_depth_optical_frame',
+            'camera_frame_id': 'D435i_camera_color_optical_frame',
         }]
     )
 

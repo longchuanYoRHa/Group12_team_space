@@ -201,7 +201,8 @@ def generate_launch_description():
     # 7. Launch Task Manager State Machine Node
     task_manager_node = Node(
         package='central_controller',
-        executable='task_manager',
+        # executable='task_manager',
+        executable='task_manager_v2',
         name='task_manager',
         output='screen',
         parameters=[{
@@ -317,10 +318,17 @@ def generate_launch_description():
         )
     )
 
+    explore_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource([explore_lite_launch]),
+        launch_arguments={
+            'use_sim_time': use_sim_time,
+        }.items()
+    )
+
     # 11. After navigate_to_pose available, delay start task manager and optionally vision
     task_manager_after_nav_action = TimerAction(
         period=3.0,  # give Nav2 time to be ready
-        actions=[task_manager_node, rover_vision_node]
+        actions=[task_manager_node, explore_launch]
     )
 
     # 9. After Nav2 starts, wait for navigate_to_pose action available, then start task manager

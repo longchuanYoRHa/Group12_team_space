@@ -13,7 +13,8 @@ def spawn_robot(context: LaunchContext, namespace: LaunchConfiguration):
     pkg_custom = get_package_share_directory("leo_custom_simulation")
 
     robot_desc = xacro.process(
-        os.path.join(pkg_custom, "urdf", "leo_with_lidar.urdf.xacro"),
+        os.path.join(pkg_custom, "urdf", "leo_with_lidar_camera.urdf.xacro"),
+        #change to leo_with_lidar.urdf.xacro if real camera is used
         mappings={"robot_ns": robot_ns},
     )
 
@@ -38,6 +39,11 @@ def spawn_robot(context: LaunchContext, namespace: LaunchConfiguration):
         arguments=["-topic", "robot_description", "-name", robot_gazebo_name, "-z", "1.65"],
     )
 
+    # D435i: Gazebo topics from leo_with_lidar_camera.urdf.xacro; ROS side matches rover_vision_sim_node (default: /D435i_camera/...)
+    d435i_color_info = "D435i_camera/color/camera_info"
+    d435i_color_image = "D435i_camera/color/image_raw"
+    d435i_depth_image = "D435i_camera/depth/image_raw"
+
     topic_bridge = Node(
         package="ros_gz_bridge",
         executable="parameter_bridge",
@@ -47,21 +53,27 @@ def spawn_robot(context: LaunchContext, namespace: LaunchConfiguration):
             robot_ns + "/odom@nav_msgs/msg/Odometry[gz.msgs.Odometry",
             robot_ns + "/tf@tf2_msgs/msg/TFMessage[gz.msgs.Pose_V",
             robot_ns + "/imu/data_raw@sensor_msgs/msg/Imu[gz.msgs.IMU",
-            robot_ns + "/camera/camera_info@sensor_msgs/msg/CameraInfo[gz.msgs.CameraInfo",
+            # robot_ns + "/camera/camera_info@sensor_msgs/msg/CameraInfo[gz.msgs.CameraInfo",
             robot_ns + "/joint_states@sensor_msgs/msg/JointState[gz.msgs.Model",
-
             robot_ns + "/scan@sensor_msgs/msg/LaserScan[gz.msgs.LaserScan",
-            robot_ns + "/boxes@sensor_msgs/msg/BoundingBoxes[gz.msgs.BoundingBoxes",
+            # robot_ns + "/boxes@sensor_msgs/msg/BoundingBoxes[gz.msgs.BoundingBoxes",
+            # D435i for rover_vision_sim_node: color camera_info
+            d435i_color_info + "@sensor_msgs/msg/CameraInfo[gz.msgs.CameraInfo",
         ],
         parameters=[{"qos_overrides./tf_static.publisher.durability": "transient_local"}],
         output="screen",
     )
 
+    # Image bridge: leo camera + D435i color & depth for rover_vision_sim_node
     image_bridge = Node(
         package="ros_gz_image",
         executable="image_bridge",
         name=node_name_prefix + "image_bridge",
-        arguments=[robot_ns + "/camera/image_raw"],
+        arguments=[
+            # robot_ns + "/camera/image_raw",
+            d435i_color_image,
+            d435i_depth_image,
+        ],
         output="screen",
     )
 
