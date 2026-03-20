@@ -210,10 +210,10 @@ base_link
 ```bash
 # From NUC, copy the source to Pi
 scp -r ~/mycobot_ws/src/my_cobot_control elephant@10.0.1.3:~/ros2_ws/src/
+scp -r ~/Desktop/Group12_team_space/Manipulator/src/my_cobot_control elephant@10.0.1.3:~/ros2_ws/src/
 
 # SSH into Pi
 ssh elephant@10.0.1.3
-# password: trunk
 
 # syc time
 sudo date -s "$(ssh leo-rover-12@10.0.1.4 'date -u +%Y-%m-%d\ %H:%M:%S.%N')"
