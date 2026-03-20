@@ -76,18 +76,18 @@ def generate_launch_description():
         condition=IfCondition(PythonExpression(["'", lidar_connected_config, "' == 'true'"]))
     )
 
-    static_tf_base_to_camera = Node(
-        package='tf2_ros',
-        executable='static_transform_publisher',
-        name='static_tf_base_to_camera',
-        arguments=[
-            '0.14813', '-0.027', '0.05957',  # x, y, z in meters
-            '0.0', '0.0', '0.0',  # roll, pitch, yaw in radians
-            'base_link', 'depth_camera' #the name of the camera link need to be clarify 
-        ],
-        output='screen',
-        condition=IfCondition(PythonExpression(["'", lidar_connected_config, "' == 'true'"]))
-    )
+    # static_tf_base_to_camera = Node(
+    #     package='tf2_ros',
+    #     executable='static_transform_publisher',
+    #     name='static_tf_base_to_camera',
+    #     arguments=[
+    #         '0.14813', '-0.027', '0.05957',  # x, y, z in meters
+    #         '0.0', '0.0', '0.0',  # roll, pitch, yaw in radians
+    #         'base_link', 'depth_camera' #the name of the camera link need to be clarify 
+    #     ],
+    #     output='screen',
+    #     condition=IfCondition(PythonExpression(["'", lidar_connected_config, "' == 'true'"]))
+    # )
 
     # Laser filter node
     laser_filter_node = Node(
@@ -228,7 +228,7 @@ def generate_launch_description():
     # 1. Wait for /scan topic available, then start static transform and laser filter
     static_tf_after_scan = TimerAction(
         period=0.1,  # short delay, ensure the wait command completes
-        actions=[static_tf_base_to_laser, static_tf_base_to_camera]
+        actions=[static_tf_base_to_laser]
     )
     
     laser_filter_after_scan = TimerAction(
