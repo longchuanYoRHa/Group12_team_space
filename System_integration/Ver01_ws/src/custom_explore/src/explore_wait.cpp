@@ -14,6 +14,7 @@
 #include <chrono>
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <memory>
 #include <functional>
 #include <mutex>
@@ -45,17 +46,15 @@
 #define ACTION_NAME "navigate_to_pose"
 #endif
 
-inline static bool same_point(const geometry_msgs::msg::Point& one,
-                               const geometry_msgs::msg::Point& two)
-{
-  double dx = one.x - two.x;
-  double dy = one.y - two.y;
-  double dist = std::sqrt(dx * dx + dy * dy);
-  return dist < 0.2;
-}
-
 namespace explore
 {
+static constexpr int kBlacklistAbortThreshold = 3;
+
+struct FrontierBlacklistEntry {
+  geometry_msgs::msg::Point point;
+  int abort_count{0};
+};
+
 class ExploreWait : public rclcpp::Node
 {
 public:
@@ -67,12 +66,13 @@ public:
     , costmap_client_(*this, &tf_buffer_)
     , prev_distance_(0.0)
     , last_markers_count_(0)
+    , last_progress_(this->now())
   {
     double timeout = 0.0;
     double min_frontier_size = 0.5;
 
     this->declare_parameter<float>("planner_frequency", 1.0);
-    this->declare_parameter<float>("progress_timeout", 30.0);
+    this->declare_parameter<float>("progress_timeout", 90.0);
     this->declare_parameter<bool>("visualize", false);
     this->declare_parameter<float>("potential_scale", 1e-3);
     this->declare_parameter<float>("orientation_scale", 0.0);
@@ -144,7 +144,11 @@ public:
           if (!active_) {
             return;
           }
-          makePlan();
+          // Frontier search only runs in makePlan(); timer only watches progress
+          // toward the current NavigateToPose goal.
+          if (nav_goal_in_flight_) {
+            checkNavProgress();
+          }
         });
 
     // Default waiting state: never run makePlan() until explore/resume=true.
@@ -259,6 +263,78 @@ private:
     marker_array_publisher_->publish(markers_msg);
   }
 
+  std::vector<FrontierBlacklistEntry>::iterator findBlacklistEntry(
+      const geometry_msgs::msg::Point& goal)
+  {
+    constexpr static size_t tolerance_cells = 5;
+    auto* costmap2d = costmap_client_.getCostmap();
+    const double tol = static_cast<double>(tolerance_cells) * costmap2d->getResolution();
+    for (auto it = frontier_blacklist_.begin(); it != frontier_blacklist_.end();
+         ++it) {
+      const double x_diff = std::fabs(goal.x - it->point.x);
+      const double y_diff = std::fabs(goal.y - it->point.y);
+      if (x_diff < tol && y_diff < tol) {
+        return it;
+      }
+    }
+    return frontier_blacklist_.end();
+  }
+
+  void bumpAbortFailure(const geometry_msgs::msg::Point& p)
+  {
+    auto it = findBlacklistEntry(p);
+    if (it != frontier_blacklist_.end()) {
+      it->abort_count =
+          std::min(it->abort_count + 1, kBlacklistAbortThreshold);
+    } else {
+      frontier_blacklist_.push_back({p, 1});
+    }
+  }
+
+  void blacklistForProgressTimeout(const geometry_msgs::msg::Point& p)
+  {
+    auto it = findBlacklistEntry(p);
+    if (it != frontier_blacklist_.end()) {
+      it->abort_count =
+          std::max(it->abort_count, kBlacklistAbortThreshold);
+    } else {
+      frontier_blacklist_.push_back({p, kBlacklistAbortThreshold});
+    }
+  }
+
+  void checkNavProgress()
+  {
+    if (!nav_goal_in_flight_) {
+      return;
+    }
+
+    auto pose = costmap_client_.getRobotPose();
+    const double dx = pose.position.x - current_nav_target_.x;
+    const double dy = pose.position.y - current_nav_target_.y;
+    const double dist = std::sqrt(dx * dx + dy * dy);
+
+    if (dist < prev_distance_) {
+      last_progress_ = this->now();
+      prev_distance_ = dist;
+    }
+
+    if (resuming_) {
+      return;
+    }
+
+    if (this->now() - last_progress_ >
+        tf2::durationFromSec(progress_timeout_)) {
+      RCLCPP_DEBUG(logger_,
+                   "Progress timeout toward current goal; blacklisting and "
+                   "replanning.");
+      blacklistForProgressTimeout(current_nav_target_);
+      nav_goal_in_flight_ = false;
+      if (active_) {
+        makePlan();
+      }
+    }
+  }
+
   void makePlan()
   {
     if (!active_) {
@@ -292,36 +368,16 @@ private:
 
     geometry_msgs::msg::Point target_position = frontier->centroid;
 
-    // time out if we are not making any progress
-    bool same_goal = same_point(prev_goal_, target_position);
-
-    prev_goal_ = target_position;
-    if (!same_goal || prev_distance_ > frontier->min_distance) {
-      // we have different goal or we made some progress
-      last_progress_ = this->now();
-      prev_distance_ = frontier->min_distance;
-    }
-
-    // black list if we've made no progress for a long time
-    if ((this->now() - last_progress_ >
-         tf2::durationFromSec(progress_timeout_)) &&
-        !resuming_) {
-      frontier_blacklist_.push_back(target_position);
-      RCLCPP_DEBUG(logger_, "Adding current goal to black list");
-      makePlan();
-      return;
-    }
-
-    if (resuming_) {
-      resuming_ = false;
-    }
-
-    // we don't need to do anything if we still pursuing the same goal
-    if (same_goal) {
-      return;
-    }
-
     RCLCPP_DEBUG(logger_, "Sending goal to move base nav2");
+
+    current_nav_target_ = target_position;
+    last_progress_ = this->now();
+    const double tdx = pose.position.x - target_position.x;
+    const double tdy = pose.position.y - target_position.y;
+    prev_distance_ = std::sqrt(tdx * tdx + tdy * tdy);
+    nav_goal_in_flight_ = true;
+    ++nav_goal_generation_;
+    const uint64_t goal_generation = nav_goal_generation_;
 
     auto goal = nav2_msgs::action::NavigateToPose::Goal();
     goal.pose.pose.position = target_position;
@@ -332,28 +388,27 @@ private:
     auto send_goal_options =
         rclcpp_action::Client<nav2_msgs::action::NavigateToPose>::SendGoalOptions();
     send_goal_options.result_callback =
-        [this, target_position](const rclcpp_action::ClientGoalHandle<
-                                     nav2_msgs::action::NavigateToPose>::WrappedResult&
-                                 result) {
+        [this, target_position, goal_generation](
+            const rclcpp_action::ClientGoalHandle<
+                nav2_msgs::action::NavigateToPose>::WrappedResult& result) {
+          if (goal_generation != nav_goal_generation_) {
+            return;
+          }
           reachedGoal(result, target_position);
         };
 
     move_base_client_->async_send_goal(goal, send_goal_options);
+
+    if (resuming_) {
+      resuming_ = false;
+    }
   }
 
   bool goalOnBlacklist(const geometry_msgs::msg::Point& goal)
   {
-    constexpr static size_t tolerace = 5;
-    auto* costmap2d = costmap_client_.getCostmap();
-    for (auto& frontier_goal : frontier_blacklist_) {
-      double x_diff = std::fabs(goal.x - frontier_goal.x);
-      double y_diff = std::fabs(goal.y - frontier_goal.y);
-      if (x_diff < tolerace * costmap2d->getResolution() &&
-          y_diff < tolerace * costmap2d->getResolution()) {
-        return true;
-      }
-    }
-    return false;
+    auto it = findBlacklistEntry(goal);
+    return it != frontier_blacklist_.end() &&
+           it->abort_count >= kBlacklistAbortThreshold;
   }
 
   void reachedGoal(
@@ -361,15 +416,18 @@ private:
           WrappedResult& result,
       const geometry_msgs::msg::Point& frontier_goal)
   {
+    nav_goal_in_flight_ = false;
+
     switch (result.code) {
       case rclcpp_action::ResultCode::SUCCEEDED:
         RCLCPP_DEBUG(logger_, "Goal was successful");
         break;
       case rclcpp_action::ResultCode::ABORTED:
         RCLCPP_DEBUG(logger_, "Goal was aborted");
-        frontier_blacklist_.push_back(frontier_goal);
-        RCLCPP_DEBUG(logger_, "Adding current goal to black list");
-        // If aborted probably because we've found another frontier, just return.
+        bumpAbortFailure(frontier_goal);
+        if (active_) {
+          makePlan();
+        }
         return;
       case rclcpp_action::ResultCode::CANCELED:
         RCLCPP_DEBUG(logger_, "Goal was canceled");
@@ -380,7 +438,9 @@ private:
         break;
     }
 
-    makePlan();
+    if (active_) {
+      makePlan();
+    }
   }
 
   void returnToInitialPose()
@@ -406,6 +466,8 @@ private:
     RCLCPP_INFO(logger_, "Exploration stopped.");
     active_ = false;
     resuming_ = false;
+    nav_goal_in_flight_ = false;
+    ++nav_goal_generation_;
     move_base_client_->async_cancel_all_goals();
     exploring_timer_->cancel();
 
@@ -455,8 +517,10 @@ private:
   rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr
       marker_array_publisher_;
 
-  std::vector<geometry_msgs::msg::Point> frontier_blacklist_;
-  geometry_msgs::msg::Point prev_goal_;
+  std::vector<FrontierBlacklistEntry> frontier_blacklist_;
+  geometry_msgs::msg::Point current_nav_target_;
+  bool nav_goal_in_flight_{false};
+  uint64_t nav_goal_generation_{0};
   double prev_distance_;
   rclcpp::Time last_progress_;
   size_t last_markers_count_;
@@ -468,7 +532,7 @@ private:
   // Parameters
   double planner_frequency_{1.0};
   double potential_scale_{1e-3}, orientation_scale_{0.0}, gain_scale_{1.0};
-  double progress_timeout_{30.0};
+  double progress_timeout_{90.0};
   bool visualize_{false};
   bool return_to_init_{false};
   std::string robot_base_frame_;
