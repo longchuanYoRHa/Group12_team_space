@@ -29,11 +29,21 @@ Costmap2DClient::Costmap2DClient(rclcpp::Node& node, const tf2_ros::Buffer* tf)
   std::string costmap_topic;
   std::string costmap_updates_topic;
 
-  node_.declare_parameter<std::string>("costmap_topic", std::string("costmap"));
-  node_.declare_parameter<std::string>("costmap_updates_topic",
-                                       std::string("costmap_updates"));
-  node_.declare_parameter<std::string>("robot_base_frame", std::string("base_link"));
-  node_.declare_parameter<double>("transform_tolerance", 0.3);
+  // Avoid ParameterAlreadyDeclaredException when the same node also loads params.yaml
+  // (or ExploreWait declares overlapping keys).
+  if (!node_.has_parameter("costmap_topic")) {
+    node_.declare_parameter<std::string>("costmap_topic", std::string("costmap"));
+  }
+  if (!node_.has_parameter("costmap_updates_topic")) {
+    node_.declare_parameter<std::string>("costmap_updates_topic",
+                                         std::string("costmap_updates"));
+  }
+  if (!node_.has_parameter("robot_base_frame")) {
+    node_.declare_parameter<std::string>("robot_base_frame", std::string("base_link"));
+  }
+  if (!node_.has_parameter("transform_tolerance")) {
+    node_.declare_parameter<double>("transform_tolerance", 0.3);
+  }
 
   node_.get_parameter("costmap_topic", costmap_topic);
   node_.get_parameter("costmap_updates_topic", costmap_updates_topic);

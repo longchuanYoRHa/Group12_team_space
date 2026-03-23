@@ -1,0 +1,15 @@
+/**:
+  ros__parameters:
+    robot_base_frame: base_link
+    # 探索结束后不再强制回到启动位姿；避免启动阶段依赖 map->base TF 做“记录初始位姿”
+    return_to_init: false
+    costmap_topic: map
+    costmap_updates_topic: map_updates
+    visualize: true
+    planner_frequency: 0.15
+    progress_timeout: 30.0
+    potential_scale: 3.0
+    orientation_scale: 0.0
+    gain_scale: 1.0
+    transform_tolerance: 0.3
+    min_frontier_size: 0.75

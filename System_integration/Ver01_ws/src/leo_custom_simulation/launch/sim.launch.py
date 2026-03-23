@@ -1,6 +1,6 @@
 import os
 from ament_index_python.packages import get_package_share_directory
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, SetEnvironmentVariable
 from launch.launch_description import LaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
@@ -8,12 +8,14 @@ from launch_ros.actions import Node
 
 def generate_launch_description():
     pkg_ros_gz_sim = get_package_share_directory("ros_gz_sim")
-    pkg_custom = get_package_share_directory("leo_custom_simulation")
-    pkg_worlds = get_package_share_directory("leo_custom_simulation")
+    pkg_directory = get_package_share_directory("leo_custom_simulation")
+    meshes_dir = os.path.join(pkg_directory, "meshes")
+    pkg_share_parent = os.path.dirname(pkg_directory)
+    gz_sim_resource_path = pkg_share_parent + os.pathsep + meshes_dir
 
     sim_world = DeclareLaunchArgument(
         "sim_world",
-        default_value=os.path.join(pkg_worlds, "worlds", "world3.sdf"),
+        default_value=os.path.join(pkg_directory, "worlds", "testspace01.sdf"),
         description="Path to the Gazebo world file",
     )
 
@@ -25,7 +27,7 @@ def generate_launch_description():
     )
 
     spawn_robot = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(os.path.join(pkg_custom, "launch", "spawn_with_lidar.launch.py")),
+        PythonLaunchDescriptionSource(os.path.join(pkg_directory, "launch", "spawn_with_lidar.launch.py")),
         launch_arguments={"robot_ns": LaunchConfiguration("robot_ns")}.items(),
     )
 
@@ -38,4 +40,16 @@ def generate_launch_description():
         output="screen",
     )
 
-    return LaunchDescription([sim_world, robot_ns, gz_sim, spawn_robot, clock_bridge])
+    return LaunchDescription(
+        [
+            SetEnvironmentVariable(
+                name="GZ_SIM_RESOURCE_PATH",
+                value=gz_sim_resource_path,
+            ),
+            sim_world,
+            robot_ns,
+            gz_sim,
+            spawn_robot,
+            clock_bridge,
+        ]
+    )

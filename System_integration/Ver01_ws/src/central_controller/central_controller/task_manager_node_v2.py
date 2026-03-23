@@ -7,6 +7,13 @@ Task manager state machine node V2 (topic-driven).
 - 在 object/bin 话题回调中直接完成：暂停/恢复探索、发送 Nav2 目标、设置 done callback 完成状态转换
 - 增加 PRECISION_ALIGN：在 Nav2 到达预位后，视觉触发关闭 local inflation 并用 /cmd_vel 做慢速对位
 - 探索结束后的地图检测与兴趣点导航逻辑保持不变，但移动到 explore_finished 回调里
+
+探索节点：与 `custom_explore` 包的 `custom_explore_node` 配合（starter_launch 中启动）。
+- 发布 `explore/resume`（Bool）控制开始/暂停；默认节点侧等待 resume=true 后才开始 frontier 探索。
+- 订阅 `explore/finished`（Bool）获知探索结束。
+
+启动流程：INIT 就绪后进入 `PRE_EXPLORE_SPIN`，通过 `/cmd_vel` 原地转约一圈，期间若视觉检测到箱子则缓存到
+`cached_bin_poses`；旋转结束后再 `explore/resume=True` 进入 frontier 探索（EXPLORE）。
 """
 
 import os
@@ -47,6 +54,8 @@ class CargoState(Enum):
 
 class TaskState(Enum):
     INIT = "init"
+    # 启动探索前原地旋转一周，用视觉扫视周围箱子并写入 cached_bin_poses（再进入 EXPLORE）
+    PRE_EXPLORE_SPIN = "pre_explore_spin"
     EXPLORE = "explore"
     NAV_TO_OBJECT_PREGRASP = "nav_to_object_pregrasp"
     PRECISION_ALIGN = "precision_align"
@@ -72,6 +81,9 @@ class NavPurpose(Enum):
 class TaskManagerNodeV2(Node):
     """
     V2 任务管理器：核心控制节点，使用话题驱动状态机。
+
+    探索由 `custom_explore/custom_explore_node` 执行，本节点仅通过 `explore/resume` 与
+    `explore/finished` 与之交互（与原先 explore_lite 话题接口一致）。
     """
 
     def __init__(self):
@@ -84,7 +96,7 @@ class TaskManagerNodeV2(Node):
         self.object_pose = None
         self.bin_pose = None
 
-        # 在 EXPLORE 阶段优先发现 bin 时缓存，按颜色存储
+        # 在 EXPLORE / 启动前旋转扫描阶段优先发现 bin 时缓存，按颜色存储
         self.cached_bin_poses = {}  # color -> PoseStamped
 
         # 探索结束标志（完成地图存储与兴趣点检测后置 True）
@@ -123,6 +135,7 @@ class TaskManagerNodeV2(Node):
         self.current_nav_purpose = NavPurpose.NONE
 
         # ========== 发布者 ==========
+        # 与 custom_explore_node 约定：True 开始/恢复探索，False 暂停（节点会 cancel nav2 goals）
         self.explore_control_pub = self.create_publisher(
             std_msgs.Bool, 'explore/resume', 10
         )
@@ -166,7 +179,7 @@ class TaskManagerNodeV2(Node):
                 qos_profile_sensor_data,
             )
 
-        # ========== 探索结束（explore 节点） ==========
+        # ========== 探索结束（custom_explore_node） ==========
         self.create_subscription(
             std_msgs.Bool, 'explore/finished', self._explore_finished_callback, 10
         )
@@ -198,6 +211,10 @@ class TaskManagerNodeV2(Node):
         # local costmap inflation 临时关闭（通过参数写入）
         self.declare_parameter('local_costmap_node_fqn', '/local_costmap/local_costmap')
         self.declare_parameter('local_inflation_radius_off', 0.0)
+        # 进入 frontier 探索前：原地旋转扫描（用于先发现周围箱子并缓存）
+        self.declare_parameter('pre_explore_spin_enable', True)
+        self.declare_parameter('pre_explore_spin_yaw_rad', 6.283185307179586)  # 约 2*pi，一整圈
+        self.declare_parameter('pre_explore_spin_angular_velocity', 0.7)  # rad/s，>0 为逆时针（俯视）
 
         # ========== Service：查询当前状态 ==========
         self.state_service = self.create_service(
@@ -467,7 +484,7 @@ class TaskManagerNodeV2(Node):
     # ========================= INIT & 状态定时器 =========================
 
     def _handle_init_state(self):
-        # 等待 Nav2 server 就绪并保存 home 位姿，然后开始探索
+        # 等待 Nav2 server 就绪并保存 home 位姿；然后先旋转扫描再开启探索（见 PRE_EXPLORE_SPIN）
         if not self.nav2_client.wait_for_server(timeout_sec=1.0):
             self.get_logger().warn('Waiting for Nav2 server...')
             return
@@ -482,11 +499,58 @@ class TaskManagerNodeV2(Node):
             self.home_pose.pose.position.y = transform.transform.translation.y
             self.home_pose.pose.orientation = transform.transform.rotation
             self.get_logger().info('System ready, home pose saved')
+
+            if self.get_parameter('pre_explore_spin_enable').value:
+                yaw = float(self.get_parameter('pre_explore_spin_yaw_rad').value)
+                omega = float(self.get_parameter('pre_explore_spin_angular_velocity').value)
+                if abs(omega) < 1e-6:
+                    self.get_logger().warn(
+                        'pre_explore_spin_angular_velocity ~ 0, skipping spin and starting explore.'
+                    )
+                    self.current_state = TaskState.EXPLORE
+                    self._publish_explore_resume_if_changed(True)
+                    return
+                dur = abs(yaw / omega)
+                self.current_state = TaskState.PRE_EXPLORE_SPIN
+                self._pre_explore_spin_start = self.get_clock().now()
+                self.get_logger().info(
+                    f'PRE_EXPLORE_SPIN: rotating {yaw:.2f} rad at {omega:.2f} rad/s (~{dur:.1f}s); '
+                    'bins will be cached if seen. Explore stays paused until spin completes.'
+                )
+                return
+
             self.current_state = TaskState.EXPLORE
-            # INIT 后立即开启探索
             self._publish_explore_resume_if_changed(True)
         except Exception as e:
             self.get_logger().warn(f'Waiting for TF: {e}')
+
+    def _handle_pre_explore_spin(self):
+        """原地旋转：发布 cmd_vel，时间到后进 EXPLORE 并 explore/resume=True。"""
+        if self._pre_explore_spin_start is None:
+            return
+
+        yaw = float(self.get_parameter('pre_explore_spin_yaw_rad').value)
+        omega = float(self.get_parameter('pre_explore_spin_angular_velocity').value)
+        duration = abs(yaw / omega) if abs(omega) > 1e-6 else 0.0
+
+        now = self.get_clock().now()
+        elapsed = (now - self._pre_explore_spin_start).nanoseconds * 1e-9
+
+        twist = geometry_msgs.Twist()
+        if elapsed < duration:
+            twist.angular.z = omega
+            self.cmd_vel_pub.publish(twist)
+            return
+
+        twist.angular.z = 0.0
+        self.cmd_vel_pub.publish(twist)
+        self._pre_explore_spin_start = None
+        keys = list(self.cached_bin_poses.keys())
+        self.get_logger().info(
+            f'PRE_EXPLORE_SPIN complete. Cached bin colors: {keys}. Starting frontier exploration.'
+        )
+        self.current_state = TaskState.EXPLORE
+        self._publish_explore_resume_if_changed(True)
 
     def _state_timer_callback(self):
         # 发布当前状态和载荷状态
@@ -500,6 +564,10 @@ class TaskManagerNodeV2(Node):
         # 在 INIT 阶段驱动一次性初始化
         if self.current_state == TaskState.INIT:
             self._handle_init_state()
+
+        # 启动探索前：原地旋转扫视（cmd_vel），结束后才 resume explore
+        if self.current_state == TaskState.PRE_EXPLORE_SPIN:
+            self._handle_pre_explore_spin()
 
         # GRASP：已发送抓取命令后，根据 /arm/status、/arm/gripper_status 判断成功/失败
         if self.current_state == TaskState.GRASP and self._arm_cmd_sent:
@@ -644,11 +712,15 @@ class TaskManagerNodeV2(Node):
 
         self.bin_pose = pose_stamped
 
-        # EXPLORE 阶段先发现 bin：只缓存，不导航
-        if self.current_state == TaskState.EXPLORE and self.cargo_state == CargoState.EMPTY:
+        # EXPLORE / 启动前旋转扫描：先发现 bin 则只缓存，不导航
+        if (
+            self.current_state in (TaskState.EXPLORE, TaskState.PRE_EXPLORE_SPIN)
+            and self.cargo_state == CargoState.EMPTY
+        ):
             self.cached_bin_poses[color] = pose_stamped
+            phase = 'PRE_EXPLORE_SPIN' if self.current_state == TaskState.PRE_EXPLORE_SPIN else 'EXPLORE'
             self.get_logger().info(
-                f'Bin detected during EXPLORE for color {color}, cached for later use.'
+                f'Bin detected during {phase} for color {color}, cached for later use.'
             )
             return
 
@@ -1100,8 +1172,8 @@ class TaskManagerNodeV2(Node):
         if not self._local_inflation_temporarily_off:
             return
         if self._local_inflation_radius_saved is None:
-            # 没有保存值时，至少恢复为 yaml 默认常见值
-            self._local_inflation_radius_saved = 0.11
+            # 没有保存值时，与 nav2_params.yaml 中 local_costmap inflation_radius 一致
+            self._local_inflation_radius_saved = 0.15
 
         try:
             fut = self._param_client_local_costmap.set_parameters(

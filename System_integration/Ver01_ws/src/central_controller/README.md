@@ -7,7 +7,7 @@ ROS 2 node that acts as the core scheduler for the Explore–Pick–Stow–Searc
 ## Main Functionality
 
 - **Explore control**  
-  Publishes to `explore/resume` (`std_msgs/Bool`) to start or pause the exploration behaviour (e.g. explore_lite). Only publishes when the value changes.
+  Publishes to `explore/resume` (`std_msgs/Bool`) to start or pause the exploration behaviour (`custom_explore` / `custom_explore_node`). Only publishes when the value changes.
 
 - **Vision integration**  
   Subscribes to detection topics from `rover_vision_node`:

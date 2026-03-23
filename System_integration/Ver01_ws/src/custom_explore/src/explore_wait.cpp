@@ -71,15 +71,34 @@ public:
     double timeout = 0.0;
     double min_frontier_size = 0.5;
 
-    this->declare_parameter<float>("planner_frequency", 1.0);
-    this->declare_parameter<float>("progress_timeout", 90.0);
-    this->declare_parameter<bool>("visualize", false);
-    this->declare_parameter<float>("potential_scale", 1e-3);
-    this->declare_parameter<float>("orientation_scale", 0.0);
-    this->declare_parameter<float>("gain_scale", 1.0);
-    this->declare_parameter<float>("min_frontier_size", 0.5);
-    this->declare_parameter<bool>("return_to_init", false);
-    this->declare_parameter<std::string>("robot_base_frame", "base_link");
+    // Params may already be declared by params.yaml and/or Costmap2DClient.
+    if (!this->has_parameter("planner_frequency")) {
+      this->declare_parameter<float>("planner_frequency", 1.0);
+    }
+    if (!this->has_parameter("progress_timeout")) {
+      this->declare_parameter<float>("progress_timeout", 90.0);
+    }
+    if (!this->has_parameter("visualize")) {
+      this->declare_parameter<bool>("visualize", false);
+    }
+    if (!this->has_parameter("potential_scale")) {
+      this->declare_parameter<float>("potential_scale", 1e-3);
+    }
+    if (!this->has_parameter("orientation_scale")) {
+      this->declare_parameter<float>("orientation_scale", 0.0);
+    }
+    if (!this->has_parameter("gain_scale")) {
+      this->declare_parameter<float>("gain_scale", 1.0);
+    }
+    if (!this->has_parameter("min_frontier_size")) {
+      this->declare_parameter<float>("min_frontier_size", 0.5);
+    }
+    if (!this->has_parameter("return_to_init")) {
+      this->declare_parameter<bool>("return_to_init", false);
+    }
+    if (!this->has_parameter("robot_base_frame")) {
+      this->declare_parameter<std::string>("robot_base_frame", "base_link");
+    }
 
     this->get_parameter("planner_frequency", planner_frequency_);
     this->get_parameter("progress_timeout", timeout);
