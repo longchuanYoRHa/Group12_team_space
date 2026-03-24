@@ -12,9 +12,8 @@ Task manager state machine node V2 (topic-driven).
 - 发布 `explore/resume`（Bool）控制开始/暂停；默认节点侧等待 resume=true 后才开始 frontier 探索。
 - 订阅 `explore/finished`（Bool）获知探索结束。
 
-启动流程：INIT 就绪后进入 `PRE_EXPLORE_SPIN`：直接 `/cmd_vel` 原地旋转，按「转一段 → 短暂停轮」循环；停轮期间查 map→base_link
-累加 yaw 变化量，给地图/定位更新时间，直到 TF 累计转角达到约一整圈（`pre_explore_spin_yaw_rad`）。期间视觉检测到箱子则缓存到
-`cached_bin_poses`；结束后 `explore/resume=True` 进入 frontier 探索（EXPLORE）。
+启动流程：INIT 就绪后进入 `PRE_EXPLORE_SPIN`：发送 Nav2 目标——在 **map** 系下相对起点沿 **+x 偏移 0.3 m、y=0**，姿态为**朝向 −x**
+（yaw=π）。期间视觉检测到箱子仍只缓存到 `cached_bin_poses`（逻辑同前）；导航结束后 `explore/resume=True` 进入 EXPLORE。
 """
 
 import math
@@ -47,6 +46,7 @@ from central_controller.detect_objects_in_pgm_map import (
     DEFAULT_RESOLUTION,
     DEFAULT_ORIGIN,
 )
+from central_controller.detection_map_coordinates_csv import DetectionMapCoordinatesCsvLogger
 
 
 class CargoState(Enum):
@@ -56,7 +56,7 @@ class CargoState(Enum):
 
 class TaskState(Enum):
     INIT = "init"
-    # 启动探索前：分段旋转 + 短停采样 TF，累计约一圈后进入 EXPLORE
+    # 启动探索前：Nav2 预导航位（map +x 偏移、朝 −x），再进入 EXPLORE
     PRE_EXPLORE_SPIN = "pre_explore_spin"
     EXPLORE = "explore"
     NAV_TO_OBJECT_PREGRASP = "nav_to_object_pregrasp"
@@ -75,6 +75,7 @@ class TaskState(Enum):
 
 class NavPurpose(Enum):
     NONE = "none"
+    PRE_EXPLORE_NAV = "pre_explore_nav"
     OBJECT_PREGRASP = "object_pregrasp"
     BIN_PREPLACE = "bin_preplace"
     INTEREST_POINT = "interest_point"
@@ -100,6 +101,8 @@ class TaskManagerNodeV2(Node):
 
         # 在 EXPLORE / 启动前旋转扫描阶段优先发现 bin 时缓存，按颜色存储
         self.cached_bin_poses = {}  # color -> PoseStamped
+        self._last_bin_map_color = ''
+        self._last_bin_vision_xyz = None  # (x,y,z) camera frame，供 CSV 与 place 对齐
 
         # 探索结束标志（完成地图存储与兴趣点检测后置 True）
         self.explore_done_flag = False
@@ -213,16 +216,13 @@ class TaskManagerNodeV2(Node):
         # local costmap inflation 临时关闭（通过参数写入）
         self.declare_parameter('local_costmap_node_fqn', '/local_costmap/local_costmap')
         self.declare_parameter('local_inflation_radius_off', 0.0)
-        # 进入 frontier 探索前：原地旋转扫描（用于先发现周围箱子并缓存）
+        # 进入 frontier 探索前：Nav2 到 map 下 (home+Δx, home.y)、朝 −x（yaw=π）
         self.declare_parameter('pre_explore_spin_enable', True)
-        self.declare_parameter('pre_explore_spin_yaw_rad', 6.283185307179586)  # 目标累计转角，约 2π
-        self.declare_parameter('pre_explore_spin_angular_velocity', 0.25)  # rad/s，分段旋转角速度
-        self.declare_parameter('pre_explore_spin_segment_sec', 0.45)  # 每段连续旋转时长
-        self.declare_parameter('pre_explore_spin_pause_sec', 0.35)  # 段间停轮，便于 map/TF 更新
-        self.declare_parameter(
-            'pre_explore_spin_path_done_tol_rad', 0.25
-        )  # TF 累计路径 ≥ yaw_rad − tol 即认为转够一圈
-        self.declare_parameter('pre_explore_spin_timeout_sec', 120.0)  # 整段流程上限
+        self.declare_parameter('pre_explore_nav_offset_x_m', 0.3)
+        self.declare_parameter('pre_explore_nav_offset_y_m', 0.0)
+        # 将 object/bin map 坐标与 PGM 兴趣点写入 CSV（路径空则使用 maps_directory 下默认文件名）
+        self.declare_parameter('detection_map_coordinates_csv_enable', True)
+        self.declare_parameter('detection_map_coordinates_csv_path', '')
 
         # ========== Service：查询当前状态 ==========
         self.state_service = self.create_service(
@@ -232,6 +232,20 @@ class TaskManagerNodeV2(Node):
         )
 
         self.get_logger().info('Task manager V2 node initialized')
+
+        # ========== map 坐标 CSV（object / bin / PGM）==========
+        self._map_coords_csv = None
+        if self.get_parameter('detection_map_coordinates_csv_enable').value:
+            csv_path = self.get_parameter('detection_map_coordinates_csv_path').value
+            if not csv_path:
+                csv_path = os.path.join(
+                    self._get_maps_directory(), 'detection_map_coordinates.csv'
+                )
+            try:
+                self._map_coords_csv = DetectionMapCoordinatesCsvLogger(csv_path)
+                self.get_logger().info(f'Detection map coordinates CSV: {csv_path}')
+            except OSError as e:
+                self.get_logger().warn(f'Could not open detection map CSV ({csv_path}): {e}')
 
         # ========== cmd_vel & costmap 参数客户端 ==========
         self.cmd_vel_pub = self.create_publisher(geometry_msgs.Twist, '/cmd_vel', 10)
@@ -251,13 +265,6 @@ class TaskManagerNodeV2(Node):
         self._backup_next_state = None  # TaskState
         self._backup_after_restore_explore_resume = None  # bool | None
 
-        # PRE_EXPLORE_SPIN：spin（转一段）↔ pause（停轮采样 TF 累加转角）
-        self._pre_explore_spin_start = None
-        self._pre_explore_spin_total_start = None
-        self._pre_explore_phase = None
-        self._pre_explore_tf_path_rad = 0.0
-        self._pre_explore_last_pause_yaw = None
-
     # ========================= 通用工具函数 =========================
 
     @staticmethod
@@ -275,6 +282,15 @@ class TaskManagerNodeV2(Node):
             a += 2.0 * math.pi
         return a
 
+    @staticmethod
+    def _quaternion_from_yaw(yaw: float) -> geometry_msgs.Quaternion:
+        half = yaw * 0.5
+        q = geometry_msgs.Quaternion()
+        q.x = 0.0
+        q.y = 0.0
+        q.z = math.sin(half)
+        q.w = math.cos(half)
+        return q
 
     def _handle_get_state_service(self, request, response):
         """
@@ -402,6 +418,15 @@ class TaskManagerNodeV2(Node):
         goal_handle = future.result()
         if not goal_handle.accepted:
             self.get_logger().error('Nav2 goal rejected!')
+            if (
+                self.current_nav_purpose == NavPurpose.PRE_EXPLORE_NAV
+                and self.current_state == TaskState.PRE_EXPLORE_SPIN
+            ):
+                self.get_logger().warn(
+                    'PRE_EXPLORE_NAV rejected; starting exploration without pre-navigation.'
+                )
+                self.current_state = TaskState.EXPLORE
+                self._publish_explore_resume_if_changed(True)
             self.nav2_goal_handle = None
             self.current_nav_purpose = NavPurpose.NONE
             return
@@ -415,6 +440,25 @@ class TaskManagerNodeV2(Node):
         goal_handle = future.result()
         status = goal_handle.status
         purpose = self.current_nav_purpose
+
+        if purpose == NavPurpose.PRE_EXPLORE_NAV:
+            keys = list(self.cached_bin_poses.keys())
+            if self.current_state == TaskState.PRE_EXPLORE_SPIN:
+                if status == GoalStatus.STATUS_SUCCEEDED:
+                    self.get_logger().info(
+                        f'PRE_EXPLORE_NAV succeeded. Cached bin colors: {keys}. '
+                        'Starting frontier exploration.'
+                    )
+                else:
+                    self.get_logger().warn(
+                        f'PRE_EXPLORE_NAV finished with status={status}; '
+                        f'cached bin colors: {keys}. Starting exploration anyway.'
+                    )
+                self.current_state = TaskState.EXPLORE
+                self._publish_explore_resume_if_changed(True)
+            self.nav2_goal_handle = None
+            self.current_nav_purpose = NavPurpose.NONE
+            return
 
         if status == GoalStatus.STATUS_SUCCEEDED:
             self.get_logger().info(f'Nav2 goal succeeded ({purpose.value})')
@@ -515,7 +559,7 @@ class TaskManagerNodeV2(Node):
     # ========================= INIT & 状态定时器 =========================
 
     def _handle_init_state(self):
-        # 等待 Nav2 server 就绪并保存 home 位姿；然后先旋转扫描再开启探索（见 PRE_EXPLORE_SPIN）
+        # 等待 Nav2 server 就绪并保存 home；可选先发 PRE_EXPLORE Nav2 再 explore
         if not self.nav2_client.wait_for_server(timeout_sec=1.0):
             self.get_logger().warn('Waiting for Nav2 server...')
             return
@@ -532,128 +576,29 @@ class TaskManagerNodeV2(Node):
             self.get_logger().info('System ready, home pose saved')
 
             if self.get_parameter('pre_explore_spin_enable').value:
-                omega = float(self.get_parameter('pre_explore_spin_angular_velocity').value)
-                if abs(omega) < 1e-6:
-                    self.get_logger().warn(
-                        'pre_explore_spin_angular_velocity ~ 0, skipping spin and starting explore.'
-                    )
-                    self.current_state = TaskState.EXPLORE
-                    self._publish_explore_resume_if_changed(True)
-                    return
-                seg = float(self.get_parameter('pre_explore_spin_segment_sec').value)
-                pause = float(self.get_parameter('pre_explore_spin_pause_sec').value)
-                full_yaw = float(self.get_parameter('pre_explore_spin_yaw_rad').value)
-                now = self.get_clock().now()
+                ox = float(self.get_parameter('pre_explore_nav_offset_x_m').value)
+                oy = float(self.get_parameter('pre_explore_nav_offset_y_m').value)
+                stamp = self.get_clock().now().to_msg()
+                goal = geometry_msgs.PoseStamped()
+                goal.header.frame_id = 'map'
+                goal.header.stamp = stamp
+                goal.pose.position.x = self.home_pose.pose.position.x + ox
+                goal.pose.position.y = self.home_pose.pose.position.y + oy
+                goal.pose.position.z = self.home_pose.pose.position.z
+                # 朝向 map −x：yaw = π
+                goal.pose.orientation = self._quaternion_from_yaw(math.pi)
                 self.current_state = TaskState.PRE_EXPLORE_SPIN
-                self._pre_explore_tf_path_rad = 0.0
-                self._pre_explore_last_pause_yaw = self._quat_yaw(
-                    self.home_pose.pose.orientation
-                )
-                self._pre_explore_phase = 'spin'
-                self._pre_explore_spin_start = now
-                self._pre_explore_spin_total_start = now
                 self.get_logger().info(
-                    f'PRE_EXPLORE_SPIN: {seg:.2f}s spin / {pause:.2f}s pause, ω={omega:.2f} rad/s, '
-                    f'TF path target≈{full_yaw:.2f} rad. Bins cached if seen.'
+                    f'PRE_EXPLORE_NAV: map goal ({goal.pose.position.x:.3f}, {goal.pose.position.y:.3f}), '
+                    f'yaw=π (−x). Offsets Δx={ox:.3f}, Δy={oy:.3f} m from home.'
                 )
+                self._send_nav_goal(goal, NavPurpose.PRE_EXPLORE_NAV)
                 return
 
             self.current_state = TaskState.EXPLORE
             self._publish_explore_resume_if_changed(True)
         except Exception as e:
             self.get_logger().warn(f'Waiting for TF: {e}')
-
-    def _pre_explore_spin_append_tf_path(self):
-        """停轮期间用 map→base_link yaw 增量累加到 _pre_explore_tf_path_rad。"""
-        try:
-            transform = self.tf_buffer.lookup_transform(
-                'map', 'base_link', rclpy.time.Time()
-            )
-            cur = self._quat_yaw(transform.transform.rotation)
-            if self._pre_explore_last_pause_yaw is not None:
-                self._pre_explore_tf_path_rad += abs(
-                    self._normalize_angle(cur - self._pre_explore_last_pause_yaw)
-                )
-            self._pre_explore_last_pause_yaw = cur
-        except Exception:
-            pass
-
-    def _finish_pre_explore_spin(self, reason_timeout=False):
-        path_done = self._pre_explore_tf_path_rad
-        twist = geometry_msgs.Twist()
-        twist.angular.z = 0.0
-        self.cmd_vel_pub.publish(twist)
-        self._pre_explore_spin_start = None
-        self._pre_explore_spin_total_start = None
-        self._pre_explore_phase = None
-        self._pre_explore_last_pause_yaw = None
-        self._pre_explore_tf_path_rad = 0.0
-        keys = list(self.cached_bin_poses.keys())
-        if reason_timeout:
-            self.get_logger().warn(
-                f'PRE_EXPLORE_SPIN: timeout; tf_path≈{path_done:.2f} rad. '
-                f'Cached bin colors: {keys}. Starting exploration.'
-            )
-        else:
-            self.get_logger().info(
-                f'PRE_EXPLORE_SPIN complete, tf_path≈{path_done:.2f} rad. '
-                f'Cached bin colors: {keys}. Starting frontier exploration.'
-            )
-        self.current_state = TaskState.EXPLORE
-        self._publish_explore_resume_if_changed(True)
-
-    def _handle_pre_explore_spin(self):
-        """分段旋转 + 短停采样 TF，累计 yaw 路径至约一整圈后进 EXPLORE。"""
-        if (
-            self._pre_explore_spin_start is None
-            or self._pre_explore_phase is None
-            or self._pre_explore_spin_total_start is None
-        ):
-            return
-
-        omega = float(self.get_parameter('pre_explore_spin_angular_velocity').value)
-        full_yaw = float(self.get_parameter('pre_explore_spin_yaw_rad').value)
-        pause_sec = float(self.get_parameter('pre_explore_spin_pause_sec').value)
-        seg_sec = float(self.get_parameter('pre_explore_spin_segment_sec').value)
-        path_tol = float(self.get_parameter('pre_explore_spin_path_done_tol_rad').value)
-        t_max = float(self.get_parameter('pre_explore_spin_timeout_sec').value)
-
-        now = self.get_clock().now()
-        seg_elapsed = (now - self._pre_explore_spin_start).nanoseconds * 1e-9
-        total_elapsed = (now - self._pre_explore_spin_total_start).nanoseconds * 1e-9
-        path_target = max(full_yaw - path_tol, 0.0)
-
-        if total_elapsed > t_max:
-            self._finish_pre_explore_spin(reason_timeout=True)
-            return
-
-        twist = geometry_msgs.Twist()
-
-        if self._pre_explore_phase == 'pause':
-            twist.angular.z = 0.0
-            self.cmd_vel_pub.publish(twist)
-            self._pre_explore_spin_append_tf_path()
-            if self._pre_explore_tf_path_rad >= path_target:
-                self._finish_pre_explore_spin(reason_timeout=False)
-                return
-            if seg_elapsed >= pause_sec:
-                self._pre_explore_phase = 'spin'
-                self._pre_explore_spin_start = now
-            return
-
-        if self._pre_explore_tf_path_rad >= path_target:
-            twist.angular.z = 0.0
-            self.cmd_vel_pub.publish(twist)
-            self._finish_pre_explore_spin(reason_timeout=False)
-            return
-        if seg_elapsed < seg_sec:
-            twist.angular.z = omega
-            self.cmd_vel_pub.publish(twist)
-        else:
-            twist.angular.z = 0.0
-            self.cmd_vel_pub.publish(twist)
-            self._pre_explore_phase = 'pause'
-            self._pre_explore_spin_start = now
 
     def _state_timer_callback(self):
         # 发布当前状态和载荷状态
@@ -667,10 +612,6 @@ class TaskManagerNodeV2(Node):
         # 在 INIT 阶段驱动一次性初始化
         if self.current_state == TaskState.INIT:
             self._handle_init_state()
-
-        # 启动探索前：原地旋转扫视（cmd_vel），结束后才 resume explore
-        if self.current_state == TaskState.PRE_EXPLORE_SPIN:
-            self._handle_pre_explore_spin()
 
         # GRASP：已发送抓取命令后，根据 /arm/status、/arm/gripper_status 判断成功/失败
         if self.current_state == TaskState.GRASP and self._arm_cmd_sent:
@@ -734,7 +675,7 @@ class TaskManagerNodeV2(Node):
 
         # 如果当前处于 GRASP 状态：用当前视觉点 camera→base_link 直接算抓取目标（不经过 map）
         if self.current_state == TaskState.GRASP:
-            self._execute_grasp_with_current_object(msg)
+            self._execute_grasp_with_current_object(msg, color)
             return
 
         # 只在探索或兴趣点等待时用检测计数来触发导航
@@ -748,6 +689,17 @@ class TaskManagerNodeV2(Node):
 
         # 检测稳定：重置计数并开始导航到预抓取位
         self.object_detection_count = 0
+
+        if self._map_coords_csv:
+            self._map_coords_csv.log_object_map_nav(
+                color,
+                msg.x,
+                msg.y,
+                msg.z,
+                pose_stamped.pose.position.x,
+                pose_stamped.pose.position.y,
+                self.current_state.name,
+            )
 
         # EXPLORE 阶段：在回调中直接完成 PAUSE_EXPLORE 的功能（停止探索 & 取消导航）
         if self.current_state == TaskState.EXPLORE:
@@ -773,7 +725,7 @@ class TaskManagerNodeV2(Node):
         self.current_state = TaskState.NAV_TO_OBJECT_PREGRASP
         self._send_nav_goal(goal_pose, NavPurpose.OBJECT_PREGRASP)
 
-    def _execute_grasp_with_current_object(self, point_msg: geometry_msgs.Point):
+    def _execute_grasp_with_current_object(self, point_msg: geometry_msgs.Point, color: str):
         """
         在 GRASP 状态下，由 object 话题回调触发。
         使用当前视觉点（camera frame）直接变换到 base_link（毫米），不经过 map；
@@ -786,6 +738,14 @@ class TaskManagerNodeV2(Node):
         if target_pt is None:
             self.get_logger().warn('Grasp: camera->base_link failed, skipping this cycle')
             return
+        if self._map_coords_csv:
+            mx = my = None
+            if self.object_pose is not None:
+                mx = self.object_pose.pose.position.x
+                my = self.object_pose.pose.position.y
+            self._map_coords_csv.log_object_pick_arm(
+                color, point_msg.x, point_msg.y, point_msg.z, mx, my
+            )
         self.get_logger().info('Sending pick target to manipulator (/arm/target_pick)...')
         self.arm_pick_pub.publish(target_pt)
         self._arm_cmd_sent = True
@@ -814,6 +774,8 @@ class TaskManagerNodeV2(Node):
             return
 
         self.bin_pose = pose_stamped
+        self._last_bin_map_color = color
+        self._last_bin_vision_xyz = (msg.x, msg.y, msg.z)
 
         # EXPLORE / 启动前旋转扫描：先发现 bin 则只缓存，不导航
         if (
@@ -825,6 +787,16 @@ class TaskManagerNodeV2(Node):
             self.get_logger().info(
                 f'Bin detected during {phase} for color {color}, cached for later use.'
             )
+            if self._map_coords_csv:
+                self._map_coords_csv.log_bin_map_cached(
+                    color,
+                    msg.x,
+                    msg.y,
+                    msg.z,
+                    pose_stamped.pose.position.x,
+                    pose_stamped.pose.position.y,
+                    self.current_state.name,
+                )
             return
 
         # PLACE_IN_BIN 状态：使用视觉信息执行放置（不再导航）
@@ -852,6 +824,17 @@ class TaskManagerNodeV2(Node):
             return
 
         self.bin_detection_count = 0
+
+        if self._map_coords_csv:
+            self._map_coords_csv.log_bin_map_nav(
+                color,
+                msg.x,
+                msg.y,
+                msg.z,
+                pose_stamped.pose.position.x,
+                pose_stamped.pose.position.y,
+                self.current_state.name,
+            )
 
         if self.current_state == TaskState.RESUME_EXPLORE_FOR_BIN:
             self.get_logger().info(
@@ -891,6 +874,15 @@ class TaskManagerNodeV2(Node):
         if target_pt is None:
             self.get_logger().warn('Place: cannot get target in base_link, skipping this cycle')
             return
+
+        if self._map_coords_csv:
+            p = self.bin_pose.pose.position
+            vx = vy = vz = None
+            if self._last_bin_vision_xyz is not None:
+                vx, vy, vz = self._last_bin_vision_xyz
+            self._map_coords_csv.log_bin_map_place_command(
+                self._last_bin_map_color, vx, vy, vz, p.x, p.y
+            )
 
         self.get_logger().info('Sending place target to manipulator (/arm/target_place)...')
         self.arm_place_pub.publish(target_pt)
@@ -968,6 +960,11 @@ class TaskManagerNodeV2(Node):
             self._publish_explore_resume_if_changed(True)
             return
 
+        if self._map_coords_csv:
+            self._map_coords_csv.log_pgm_points(
+                raw_points, 'pgm_raw', pgm_path=pgm_path
+            )
+
         filtered = []
         for (mx, my) in raw_points:
             p = geometry_msgs.Point()
@@ -979,6 +976,11 @@ class TaskManagerNodeV2(Node):
             if check_pose_in_blacklist(p, self.bin_blacklist, self.blacklist_radius):
                 continue
             filtered.append((mx, my))
+
+        if self._map_coords_csv:
+            self._map_coords_csv.log_pgm_points(
+                filtered, 'pgm_filtered', pgm_path=pgm_path
+            )
 
         self.interest_points = filtered
         self.interest_point_index = 0

@@ -77,7 +77,7 @@
   <joint name="base_to_D435i_camera" type="fixed">
     <parent link="base_link"/>
     <child link="D435i_camera_link"/>
-    <origin xyz="0.14813 -0.027 0.05957" rpy="0.0 0.0 0.0"/>
+    <origin xyz="0.14813 -0.027 0.05957" rpy="0.0 0.34 0.0"/>
   </joint>
   
   <!-- depth camera frame -->
