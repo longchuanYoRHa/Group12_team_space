@@ -316,7 +316,7 @@ planner_server:
       # 略降“贴走廊中心”的强度，减轻在狭窄/高代价栅格附近的路径抖动
       cost_travel_multiplier: 1.5
       # true: 末端沿切入方向，用弧线对准，少“到点再原地转”；若希望更常先转再直走，可改 false（终点可能多扭头）。
-      use_final_approach_orientation: true
+      use_final_approach_orientation: false
       smooth_path: false
       # smoother:
       #   max_iterations: 1000
@@ -372,7 +372,7 @@ behavior_server:
     transform_tolerance: 0.1
     simulate_ahead_time: 2.0
     # SIM: 与 MPPI wz_max 一致；REAL: 改回 0.34906585（20°/s）
-    max_rotational_vel: 1.04719755
+    max_rotational_vel: 0.34906585
     min_rotational_vel: 0.08
     rotational_acc_lim: 3.2
 
