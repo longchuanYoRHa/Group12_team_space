@@ -161,7 +161,7 @@ controller_server:
       CostCritic:
         enabled: true
         cost_power: 1
-        cost_weight: 3.81 #3.81
+        cost_weight: 3.00 #3.81
         near_collision_cost: 253
         critical_cost: 300.0
         consider_footprint: true # change to footprint model for square robot
@@ -192,7 +192,7 @@ controller_server:
         offset_from_furthest: 4
         threshold_to_consider: 0.5
         max_angle_to_furthest: 1.0
-        mode: 0
+        mode: 2
       # TwirlingCritic:
       #   enabled: true
       #   twirling_cost_power: 1
@@ -215,7 +215,7 @@ local_costmap:
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         # 越小：同一 inflation_radius 内代价衰减越慢 → RViz 里渐变层更“宽”、过渡更柔和
-        cost_scaling_factor: 6.0
+        cost_scaling_factor: 8.0
         # 浅蓝过渡带总宽度（障碍边沿到自由空间）约 15 cm；须 ≥ 足迹外接圆半径
         inflation_radius: 0.322
       voxel_layer:
@@ -417,8 +417,8 @@ velocity_smoother:
     feedback: "OPEN_LOOP"
     # 线速度：25 cm/s。角速度：实车 20°/s≈0.349 rad/s；仿真 RTF 低时可放宽（当前为 2× 实车角速度）。
     # 【实车运行】请改回：max/min 第三项 ±0.34906585，并同步 MPPI wz_max、behavior max_rotational_vel、Ackermann min_turning_r≈0.72
-    max_velocity: [0.25, 0.0, 0.6981317]
-    min_velocity: [-0.25, 0.0, -0.6981317]
+    max_velocity: [0.25, 0.0, 1.04719755]
+    min_velocity: [-0.25, 0.0, -1.04719755]
     max_accel: [2.5, 0.0, 3.2]
     max_decel: [-2.5, 0.0, -3.2]
     odom_topic: "odom"
