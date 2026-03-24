@@ -13,7 +13,7 @@ def spawn_robot(context: LaunchContext, namespace: LaunchConfiguration):
     pkg_custom = get_package_share_directory("leo_custom_simulation")
 
     robot_desc = xacro.process(
-        os.path.join(pkg_custom, "urdf", "leo_with_lidar.urdf.xacro"),
+        os.path.join(pkg_custom, "urdf", "leo_with_lidar_camera.urdf.xacro"),
         #change to leo_with_lidar.urdf.xacro if real camera is used
         mappings={"robot_ns": robot_ns},
     )
@@ -36,7 +36,7 @@ def spawn_robot(context: LaunchContext, namespace: LaunchConfiguration):
         executable="create",
         name="ros_gz_sim_create",
         output="both",
-        arguments=["-topic", "robot_description", "-name", robot_gazebo_name, "-z", "1.65"],
+        arguments=["-topic", "robot_description", "-name", robot_gazebo_name, "-z", "0.15"],
     )
 
     # D435i: Gazebo topics from leo_with_lidar_camera.urdf.xacro; ROS side matches rover_vision_sim_node (default: /D435i_camera/...)
@@ -58,26 +58,26 @@ def spawn_robot(context: LaunchContext, namespace: LaunchConfiguration):
             robot_ns + "/scan@sensor_msgs/msg/LaserScan[gz.msgs.LaserScan",
             # robot_ns + "/boxes@sensor_msgs/msg/BoundingBoxes[gz.msgs.BoundingBoxes",
             # D435i for rover_vision_sim_node: color camera_info
-            # d435i_color_info + "@sensor_msgs/msg/CameraInfo[gz.msgs.CameraInfo",
+            d435i_color_info + "@sensor_msgs/msg/CameraInfo[gz.msgs.CameraInfo",
         ],
         parameters=[{"qos_overrides./tf_static.publisher.durability": "transient_local"}],
         output="screen",
     )
 
     # Image bridge: leo camera + D435i color & depth for rover_vision_sim_node
-    # image_bridge = Node(
-    #     package="ros_gz_image",
-    #     executable="image_bridge",
-    #     name=node_name_prefix + "image_bridge",
-    #     arguments=[
-    #         # robot_ns + "/camera/image_raw",
-    #         d435i_color_image,
-    #         d435i_depth_image,
-    #     ],
-    #     output="screen",
-    # )
+    image_bridge = Node(
+        package="ros_gz_image",
+        executable="image_bridge",
+        name=node_name_prefix + "image_bridge",
+        arguments=[
+            # robot_ns + "/camera/image_raw",
+            d435i_color_image,
+            d435i_depth_image,
+        ],
+        output="screen",
+    )
 
-    return [robot_state_publisher, leo_rover, topic_bridge]
+    return [robot_state_publisher, leo_rover, topic_bridge, image_bridge]
 
 def generate_launch_description():
     name_argument = DeclareLaunchArgument("robot_ns", default_value="", description="Robot namespace")

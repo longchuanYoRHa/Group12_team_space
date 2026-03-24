@@ -69,6 +69,8 @@ class RoverVisionSimNode(Node):
         self.declare_parameter("depth_topic", "/D435i_camera/depth/image_raw")
         self.declare_parameter("camera_info_topic", "/D435i_camera/color/camera_info")
         self.declare_parameter("use_openvino_gpu", True)
+        # OpenVINO / Ultralytics: "intel:gpu" -> Intel GPU (通常为核显); 多 GPU 时可试 "intel:gpu.0" / "intel:gpu.1"
+        self.declare_parameter("openvino_device", "intel:gpu")
         self.declare_parameter("visualize", True)
         self.declare_parameter("model_dir", "")
 
@@ -116,7 +118,12 @@ class RoverVisionSimNode(Node):
         self.prev_time = time.time()
 
         self.timer = self.create_timer(1.0 / 30.0, self._tick)
-        self.get_logger().info(f"SIM vision subscribed to color={color_topic}, depth={depth_topic}, info={camera_info_topic}")
+        use_ov = self.get_parameter("use_openvino_gpu").get_parameter_value().bool_value
+        ov_dev = self.get_parameter("openvino_device").get_parameter_value().string_value.strip() or "intel:gpu"
+        self.get_logger().info(
+            f"SIM vision subscribed to color={color_topic}, depth={depth_topic}, info={camera_info_topic}; "
+            f"OpenVINO device={(ov_dev if use_ov else 'intel:cpu')}"
+        )
 
     def _on_info(self, msg: CameraInfo) -> None:
         fx, fy, cx, cy = _camera_info_to_k(msg)
@@ -158,7 +165,11 @@ class RoverVisionSimNode(Node):
         self.prev_time = curr_time
 
         use_openvino_gpu = self.get_parameter("use_openvino_gpu").get_parameter_value().bool_value
-        device = "intel:gpu" if use_openvino_gpu else "cpu"
+        ov_device = self.get_parameter("openvino_device").get_parameter_value().string_value.strip()
+        if not ov_device:
+            ov_device = "intel:gpu"
+        # OpenVINO IR 模型用 intel:*；非 GPU 时走 OpenVINO CPU 插件（勿用 "cpu"，否则可能走错后端）
+        device = ov_device if use_openvino_gpu else "intel:cpu"
 
         try:
             results = self.model.predict(

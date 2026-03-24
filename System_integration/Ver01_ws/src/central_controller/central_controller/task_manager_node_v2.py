@@ -12,10 +12,12 @@ Task manager state machine node V2 (topic-driven).
 - 发布 `explore/resume`（Bool）控制开始/暂停；默认节点侧等待 resume=true 后才开始 frontier 探索。
 - 订阅 `explore/finished`（Bool）获知探索结束。
 
-启动流程：INIT 就绪后进入 `PRE_EXPLORE_SPIN`，通过 `/cmd_vel` 原地转约一圈，期间若视觉检测到箱子则缓存到
-`cached_bin_poses`；旋转结束后再 `explore/resume=True` 进入 frontier 探索（EXPLORE）。
+启动流程：INIT 就绪后进入 `PRE_EXPLORE_SPIN`：直接 `/cmd_vel` 原地旋转，按「转一段 → 短暂停轮」循环；停轮期间查 map→base_link
+累加 yaw 变化量，给地图/定位更新时间，直到 TF 累计转角达到约一整圈（`pre_explore_spin_yaw_rad`）。期间视觉检测到箱子则缓存到
+`cached_bin_poses`；结束后 `explore/resume=True` 进入 frontier 探索（EXPLORE）。
 """
 
+import math
 import os
 import sys
 import subprocess
@@ -54,7 +56,7 @@ class CargoState(Enum):
 
 class TaskState(Enum):
     INIT = "init"
-    # 启动探索前原地旋转一周，用视觉扫视周围箱子并写入 cached_bin_poses（再进入 EXPLORE）
+    # 启动探索前：分段旋转 + 短停采样 TF，累计约一圈后进入 EXPLORE
     PRE_EXPLORE_SPIN = "pre_explore_spin"
     EXPLORE = "explore"
     NAV_TO_OBJECT_PREGRASP = "nav_to_object_pregrasp"
@@ -213,8 +215,14 @@ class TaskManagerNodeV2(Node):
         self.declare_parameter('local_inflation_radius_off', 0.0)
         # 进入 frontier 探索前：原地旋转扫描（用于先发现周围箱子并缓存）
         self.declare_parameter('pre_explore_spin_enable', True)
-        self.declare_parameter('pre_explore_spin_yaw_rad', 6.283185307179586)  # 约 2*pi，一整圈
-        self.declare_parameter('pre_explore_spin_angular_velocity', 0.7)  # rad/s，>0 为逆时针（俯视）
+        self.declare_parameter('pre_explore_spin_yaw_rad', 6.283185307179586)  # 目标累计转角，约 2π
+        self.declare_parameter('pre_explore_spin_angular_velocity', 0.25)  # rad/s，分段旋转角速度
+        self.declare_parameter('pre_explore_spin_segment_sec', 0.45)  # 每段连续旋转时长
+        self.declare_parameter('pre_explore_spin_pause_sec', 0.35)  # 段间停轮，便于 map/TF 更新
+        self.declare_parameter(
+            'pre_explore_spin_path_done_tol_rad', 0.25
+        )  # TF 累计路径 ≥ yaw_rad − tol 即认为转够一圈
+        self.declare_parameter('pre_explore_spin_timeout_sec', 120.0)  # 整段流程上限
 
         # ========== Service：查询当前状态 ==========
         self.state_service = self.create_service(
@@ -243,7 +251,30 @@ class TaskManagerNodeV2(Node):
         self._backup_next_state = None  # TaskState
         self._backup_after_restore_explore_resume = None  # bool | None
 
+        # PRE_EXPLORE_SPIN：spin（转一段）↔ pause（停轮采样 TF 累加转角）
+        self._pre_explore_spin_start = None
+        self._pre_explore_spin_total_start = None
+        self._pre_explore_phase = None
+        self._pre_explore_tf_path_rad = 0.0
+        self._pre_explore_last_pause_yaw = None
+
     # ========================= 通用工具函数 =========================
+
+    @staticmethod
+    def _quat_yaw(q: geometry_msgs.Quaternion) -> float:
+        return math.atan2(
+            2.0 * (q.w * q.z + q.x * q.y),
+            1.0 - 2.0 * (q.y * q.y + q.z * q.z),
+        )
+
+    @staticmethod
+    def _normalize_angle(a: float) -> float:
+        while a > math.pi:
+            a -= 2.0 * math.pi
+        while a < -math.pi:
+            a += 2.0 * math.pi
+        return a
+
 
     def _handle_get_state_service(self, request, response):
         """
@@ -501,7 +532,6 @@ class TaskManagerNodeV2(Node):
             self.get_logger().info('System ready, home pose saved')
 
             if self.get_parameter('pre_explore_spin_enable').value:
-                yaw = float(self.get_parameter('pre_explore_spin_yaw_rad').value)
                 omega = float(self.get_parameter('pre_explore_spin_angular_velocity').value)
                 if abs(omega) < 1e-6:
                     self.get_logger().warn(
@@ -510,12 +540,21 @@ class TaskManagerNodeV2(Node):
                     self.current_state = TaskState.EXPLORE
                     self._publish_explore_resume_if_changed(True)
                     return
-                dur = abs(yaw / omega)
+                seg = float(self.get_parameter('pre_explore_spin_segment_sec').value)
+                pause = float(self.get_parameter('pre_explore_spin_pause_sec').value)
+                full_yaw = float(self.get_parameter('pre_explore_spin_yaw_rad').value)
+                now = self.get_clock().now()
                 self.current_state = TaskState.PRE_EXPLORE_SPIN
-                self._pre_explore_spin_start = self.get_clock().now()
+                self._pre_explore_tf_path_rad = 0.0
+                self._pre_explore_last_pause_yaw = self._quat_yaw(
+                    self.home_pose.pose.orientation
+                )
+                self._pre_explore_phase = 'spin'
+                self._pre_explore_spin_start = now
+                self._pre_explore_spin_total_start = now
                 self.get_logger().info(
-                    f'PRE_EXPLORE_SPIN: rotating {yaw:.2f} rad at {omega:.2f} rad/s (~{dur:.1f}s); '
-                    'bins will be cached if seen. Explore stays paused until spin completes.'
+                    f'PRE_EXPLORE_SPIN: {seg:.2f}s spin / {pause:.2f}s pause, ω={omega:.2f} rad/s, '
+                    f'TF path target≈{full_yaw:.2f} rad. Bins cached if seen.'
                 )
                 return
 
@@ -524,33 +563,97 @@ class TaskManagerNodeV2(Node):
         except Exception as e:
             self.get_logger().warn(f'Waiting for TF: {e}')
 
-    def _handle_pre_explore_spin(self):
-        """原地旋转：发布 cmd_vel，时间到后进 EXPLORE 并 explore/resume=True。"""
-        if self._pre_explore_spin_start is None:
-            return
+    def _pre_explore_spin_append_tf_path(self):
+        """停轮期间用 map→base_link yaw 增量累加到 _pre_explore_tf_path_rad。"""
+        try:
+            transform = self.tf_buffer.lookup_transform(
+                'map', 'base_link', rclpy.time.Time()
+            )
+            cur = self._quat_yaw(transform.transform.rotation)
+            if self._pre_explore_last_pause_yaw is not None:
+                self._pre_explore_tf_path_rad += abs(
+                    self._normalize_angle(cur - self._pre_explore_last_pause_yaw)
+                )
+            self._pre_explore_last_pause_yaw = cur
+        except Exception:
+            pass
 
-        yaw = float(self.get_parameter('pre_explore_spin_yaw_rad').value)
-        omega = float(self.get_parameter('pre_explore_spin_angular_velocity').value)
-        duration = abs(yaw / omega) if abs(omega) > 1e-6 else 0.0
-
-        now = self.get_clock().now()
-        elapsed = (now - self._pre_explore_spin_start).nanoseconds * 1e-9
-
+    def _finish_pre_explore_spin(self, reason_timeout=False):
+        path_done = self._pre_explore_tf_path_rad
         twist = geometry_msgs.Twist()
-        if elapsed < duration:
-            twist.angular.z = omega
-            self.cmd_vel_pub.publish(twist)
-            return
-
         twist.angular.z = 0.0
         self.cmd_vel_pub.publish(twist)
         self._pre_explore_spin_start = None
+        self._pre_explore_spin_total_start = None
+        self._pre_explore_phase = None
+        self._pre_explore_last_pause_yaw = None
+        self._pre_explore_tf_path_rad = 0.0
         keys = list(self.cached_bin_poses.keys())
-        self.get_logger().info(
-            f'PRE_EXPLORE_SPIN complete. Cached bin colors: {keys}. Starting frontier exploration.'
-        )
+        if reason_timeout:
+            self.get_logger().warn(
+                f'PRE_EXPLORE_SPIN: timeout; tf_path≈{path_done:.2f} rad. '
+                f'Cached bin colors: {keys}. Starting exploration.'
+            )
+        else:
+            self.get_logger().info(
+                f'PRE_EXPLORE_SPIN complete, tf_path≈{path_done:.2f} rad. '
+                f'Cached bin colors: {keys}. Starting frontier exploration.'
+            )
         self.current_state = TaskState.EXPLORE
         self._publish_explore_resume_if_changed(True)
+
+    def _handle_pre_explore_spin(self):
+        """分段旋转 + 短停采样 TF，累计 yaw 路径至约一整圈后进 EXPLORE。"""
+        if (
+            self._pre_explore_spin_start is None
+            or self._pre_explore_phase is None
+            or self._pre_explore_spin_total_start is None
+        ):
+            return
+
+        omega = float(self.get_parameter('pre_explore_spin_angular_velocity').value)
+        full_yaw = float(self.get_parameter('pre_explore_spin_yaw_rad').value)
+        pause_sec = float(self.get_parameter('pre_explore_spin_pause_sec').value)
+        seg_sec = float(self.get_parameter('pre_explore_spin_segment_sec').value)
+        path_tol = float(self.get_parameter('pre_explore_spin_path_done_tol_rad').value)
+        t_max = float(self.get_parameter('pre_explore_spin_timeout_sec').value)
+
+        now = self.get_clock().now()
+        seg_elapsed = (now - self._pre_explore_spin_start).nanoseconds * 1e-9
+        total_elapsed = (now - self._pre_explore_spin_total_start).nanoseconds * 1e-9
+        path_target = max(full_yaw - path_tol, 0.0)
+
+        if total_elapsed > t_max:
+            self._finish_pre_explore_spin(reason_timeout=True)
+            return
+
+        twist = geometry_msgs.Twist()
+
+        if self._pre_explore_phase == 'pause':
+            twist.angular.z = 0.0
+            self.cmd_vel_pub.publish(twist)
+            self._pre_explore_spin_append_tf_path()
+            if self._pre_explore_tf_path_rad >= path_target:
+                self._finish_pre_explore_spin(reason_timeout=False)
+                return
+            if seg_elapsed >= pause_sec:
+                self._pre_explore_phase = 'spin'
+                self._pre_explore_spin_start = now
+            return
+
+        if self._pre_explore_tf_path_rad >= path_target:
+            twist.angular.z = 0.0
+            self.cmd_vel_pub.publish(twist)
+            self._finish_pre_explore_spin(reason_timeout=False)
+            return
+        if seg_elapsed < seg_sec:
+            twist.angular.z = omega
+            self.cmd_vel_pub.publish(twist)
+        else:
+            twist.angular.z = 0.0
+            self.cmd_vel_pub.publish(twist)
+            self._pre_explore_phase = 'pause'
+            self._pre_explore_spin_start = now
 
     def _state_timer_callback(self):
         # 发布当前状态和载荷状态
