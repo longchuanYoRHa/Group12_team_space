@@ -36,7 +36,7 @@ def spawn_robot(context: LaunchContext, namespace: LaunchConfiguration):
         executable="create",
         name="ros_gz_sim_create",
         output="both",
-        arguments=["-topic", "robot_description", "-name", robot_gazebo_name, "-z", "1.65"],
+        arguments=["-topic", "robot_description", "-name", robot_gazebo_name, "-z", "0.15"],
     )
 
     # D435i: Gazebo topics from leo_with_lidar_camera.urdf.xacro; ROS side matches rover_vision_sim_node (default: /D435i_camera/...)

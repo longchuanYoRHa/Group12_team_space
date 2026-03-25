@@ -27,8 +27,8 @@ def generate_launch_description():
     rplidar_pkg_dir = FindPackageShare('rplidar_ros')
     nav2_bringup_dir = FindPackageShare('nav2_bringup')
     controller_pkg_dir = FindPackageShare('central_controller')
-    explore_lite_launch = PathJoinSubstitution(
-        [FindPackageShare('explore_lite'), 'launch', 'explore.launch.py']
+    custom_explore_params = PathJoinSubstitution(
+        [FindPackageShare('custom_explore'), 'config', 'params.yaml']
     )
 
     # Launch arguments
@@ -76,18 +76,18 @@ def generate_launch_description():
         condition=IfCondition(PythonExpression(["'", lidar_connected_config, "' == 'true'"]))
     )
 
-    static_tf_base_to_camera = Node(
-        package='tf2_ros',
-        executable='static_transform_publisher',
-        name='static_tf_base_to_camera',
-        arguments=[
-            '0.14813', '-0.027', '0.05957',  # x, y, z in meters
-            '0.0', '0.0', '0.0',  # roll, pitch, yaw in radians
-            'base_link', 'depth_camera' #the name of the camera link need to be clarify 
-        ],
-        output='screen',
-        condition=IfCondition(PythonExpression(["'", lidar_connected_config, "' == 'true'"]))
-    )
+    # static_tf_base_to_camera = Node(
+    #     package='tf2_ros',
+    #     executable='static_transform_publisher',
+    #     name='static_tf_base_to_camera',
+    #     arguments=[
+    #         '0.14813', '-0.027', '0.05957',  # x, y, z in meters
+    #         '0.0', '0.0', '0.0',  # roll, pitch, yaw in radians
+    #         'base_link', 'depth_camera' #the name of the camera link need to be clarify 
+    #     ],
+    #     output='screen',
+    #     condition=IfCondition(PythonExpression(["'", lidar_connected_config, "' == 'true'"]))
+    # )
 
     # Laser filter node
     laser_filter_node = Node(
@@ -228,7 +228,7 @@ def generate_launch_description():
     # 1. Wait for /scan topic available, then start static transform and laser filter
     static_tf_after_scan = TimerAction(
         period=0.1,  # short delay, ensure the wait command completes
-        actions=[static_tf_base_to_laser, static_tf_base_to_camera]
+        actions=[static_tf_base_to_laser]
     )
     
     laser_filter_after_scan = TimerAction(
@@ -318,17 +318,21 @@ def generate_launch_description():
         )
     )
 
-    explore_launch = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource([explore_lite_launch]),
-        launch_arguments={
-            'use_sim_time': use_sim_time,
-        }.items()
+    # Frontier exploration: custom_explore（默认等待 explore/resume=true 后才开始，与 task_manager_v2 一致）
+    explore_remappings = [('/tf', 'tf'), ('/tf_static', 'tf_static')]
+    custom_explore_node = Node(
+        package='custom_explore',
+        executable='custom_explore_node',
+        name='custom_explore_node',
+        output='screen',
+        parameters=[custom_explore_params, {'use_sim_time': use_sim_time}],
+        remappings=explore_remappings,
     )
 
     # 11. After navigate_to_pose available, delay start task manager and optionally vision
     task_manager_after_nav_action = TimerAction(
         period=3.0,  # give Nav2 time to be ready
-        actions=[task_manager_node, explore_launch]
+        actions=[task_manager_node, custom_explore_node]
     )
 
     # 9. After Nav2 starts, wait for navigate_to_pose action available, then start task manager
