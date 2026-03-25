@@ -22,7 +22,7 @@ IMG_SIZE = 640
 TARGET_CUBE_M = 0.02
 BIN_M = 0.20
 ERROR_MARGIN = 0.60
-MAX_Z_LIMIT = 0.50
+MAX_Z_LIMIT = 0.70
 
 
 def _camera_info_to_k(info: CameraInfo) -> Tuple[float, float, float, float]:

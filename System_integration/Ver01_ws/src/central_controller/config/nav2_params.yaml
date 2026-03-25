@@ -95,7 +95,7 @@ controller_server:
     general_goal_checker:
       stateful: True
       plugin: "nav2_controller::SimpleGoalChecker"
-      xy_goal_tolerance: 0.15
+      xy_goal_tolerance: 0.18
       # 略放宽终点朝向，减轻路径末端与目标朝向不一致时的扭头振荡
       yaw_goal_tolerance: 0.15
     FollowPath:
