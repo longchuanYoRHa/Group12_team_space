@@ -23,18 +23,18 @@
 **Message field layout (`geometry_msgs/msg/Point`):**
 
 ```yaml
-x: float64   # X coordinate (mm) in base_link frame
-y: float64   # Y coordinate (mm) in base_link frame
-z: float64   # Z coordinate (mm) in base_link frame
+x: float64   # X coordinate (m) in base_link frame
+y: float64   # Y coordinate (m) in base_link frame
+z: float64   # Z coordinate (m) in base_link frame
 ```
 
 **Coordinate Limits (arm base frame, after TF2 transform):**
 
-| Axis | Min (mm) | Max (mm) |
+| Axis | Min (m) | Max (m) |
 |---|---|---|
-| x | -281.45 | 281.45 |
-| y | -281.45 | 281.45 |
-| z | -70.0 | 450.0 |
+| x | 0.015 | 0.295 |
+| y | -0.130 | 0.070 |
+| z | 0.015 | 0.430 |
 
 ---
 

@@ -17,22 +17,17 @@ Publishes:
   - gripper_status (std_msgs/String)
 
 TF2 Frames (static transforms from launch file):
-  camera_link -> arm_base_link       (camera and arm both on rover)
+  base_link -> camera_link           (camera and arm both on rover)
+  base_link -> g_base                (arm base, matches URDF)
   joint6_flange -> gripper_base      (from URDF)oint6_flange -> gripper_tip
   gripper_base -> gripper_tip        (gripper finger length)
-
-Note: If rover moves, navigation will provide map->rover_base transform,
-      and you can add rover_base->camera_link static transform.
-      This node will automatically use the full chain.
 """
 
 import os
-import json
 import math
 import time
 import threading
 from enum import Enum, auto
-from pathlib import Path
 
 import rclpy
 from rclpy.node import Node
@@ -94,9 +89,6 @@ class MockMyCobot280:
     def get_angles(self):
         return self._angles
 
-    def get_coords(self):
-        return [0.0, 0.0, 200.0, -180.0, 0.0, 0.0]
-
     def is_moving(self):
         return 0
 
@@ -139,28 +131,28 @@ class MyCobotControllerTF2(Node):
         'joint6_to_joint5',
         'joint6output_to_joint6',
     ]
-
+    
+    #  Limitation in meter
     COORD_LIMITS = {
-        'x': (-281.45, 281.45),
-        'y': (-281.45, 281.45),
-        'z': (-70.0, 450.0),
+        'x': (0.015, 0.295),
+        'y': (-0.130, 0.070),
+        'z': (0.015, 0.430),
     }
 
     def __init__(self):
         super().__init__('mycobot_controller_tf2')
 
         # ---- ROS parameters ------------------------------------------------
-        self.declare_parameter('safe_z', 250.0)
+        self.declare_parameter('safe_z', 0.200)
         self.declare_parameter('move_speed', 40)
         self.declare_parameter('gripper_speed', 80)
-        self.declare_parameter('end_rx', -178.63)
-        self.declare_parameter('end_ry', 4.73)
-        self.declare_parameter('end_rz', -85.94)
+        self.declare_parameter('end_rx', -180.0)
+        self.declare_parameter('end_ry', 0.0)
+        self.declare_parameter('end_rz', -135.0)
         self.declare_parameter('gripper_torque', 300)
         self.declare_parameter('grip_threshold', 25)
         self.declare_parameter('grip_check_retries', 2)
-        self.declare_parameter('home_angles', [0.0, 0.0, 0.0, 0.0, 0.0, -45.0])
-        self.declare_parameter('calibration_file', '')
+        self.declare_parameter('home_angles', [0.0, 0.0, 0.0, 0.0, 0.0, 45.0])
         
         # TF2 related parameters
         self.declare_parameter('camera_frame', 'camera_link')
@@ -169,7 +161,7 @@ class MyCobotControllerTF2(Node):
         self.declare_parameter('gripper_tip_frame', 'gripper_tip')
         self.declare_parameter('tf_timeout', 1.0)  # seconds
         self.declare_parameter('compensate_gripper_offset', True)
-        self.declare_parameter('gripper_offset_z', 79.0)  # mm, fallback if TF2 fails
+        self.declare_parameter('gripper_offset_z', 0.079)  # m, fallback if TF2 fails
 
         self._safe_z = self.get_parameter('safe_z').value
         self._move_speed = self.get_parameter('move_speed').value
@@ -192,23 +184,6 @@ class MyCobotControllerTF2(Node):
         self._tf_timeout = self.get_parameter('tf_timeout').value
         self._compensate_gripper = self.get_parameter('compensate_gripper_offset').value
         self._gripper_offset_z = self.get_parameter('gripper_offset_z').value
-
-        # ---- Load calibration -----------------------------------------------
-        self._calibration = {}
-        cal_file = self.get_parameter('calibration_file').value
-        if cal_file and os.path.exists(cal_file):
-            self._load_calibration(cal_file)
-        else:
-            self._auto_load_calibration()
-
-        if 'home' in self._calibration:
-            cal_home = self._calibration['home'].get('angles', [])
-            if len(cal_home) == 6:
-                self._home_angles = cal_home
-        if 'pickup' in self._calibration:
-            cal_coords = self._calibration['pickup'].get('coords', [])
-            if len(cal_coords) == 6:
-                self._end_rpy = cal_coords[3:6]
 
         # ---- TF2 setup ------------------------------------------------------
         self.tf_buffer = Buffer()
@@ -274,33 +249,16 @@ class MyCobotControllerTF2(Node):
         if self._compensate_gripper:
             gripper_offset = self._get_gripper_offset_from_tf2()
             if gripper_offset is not None:
-                self.get_logger().info(f'  Gripper offset   : {gripper_offset:.1f} mm (from TF2)')
+                dx, dy, dz = gripper_offset
+                self.get_logger().info(f'  Gripper offset   : [{dx:.4f}, {dy:.4f}, {dz:.4f}] m (from TF2)')
             else:
-                self.get_logger().info(f'  Gripper offset   : {self._gripper_offset_z:.1f} mm (fallback)')
+                self.get_logger().info(f'  Gripper offset   : [0.0000, 0.0000, {self._gripper_offset_z:.4f}] m (fallback Z)')
         else:
-            self.get_logger().info(f'  Gripper offset   : disabled')
+            self.get_logger().info('  Gripper offset   : disabled')
         
         self.get_logger().info('='*60)
         self.get_logger().info('Waiting for target_pick message...')
 
-    # ======================================================================
-    # Calibration
-    # ======================================================================
-    def _load_calibration(self, filepath):
-        try:
-            with open(filepath, 'r') as f:
-                self._calibration = json.load(f)
-            self.get_logger().info(f'Loaded calibration: {filepath}')
-        except Exception as e:
-            self.get_logger().error(f'Failed to load calibration: {e}')
-
-    def _auto_load_calibration(self):
-        cal_dir = Path(__file__).parent / 'calibration_data'
-        if not cal_dir.exists():
-            return
-        cal_files = sorted(cal_dir.glob('calibration_*.json'))
-        if cal_files:
-            self._load_calibration(str(cal_files[-1]))
 
     # ======================================================================
     # TF2 Transform Methods
@@ -323,40 +281,40 @@ class MyCobotControllerTF2(Node):
                 time=rclpy.time.Time(),
                 timeout=Duration(seconds=self._tf_timeout)
             )
-            self.get_logger().info(f'  ✓ TF2: {self._camera_frame} -> {self._arm_base_frame} available')
+            self.get_logger().info(f'  TF2: {self._camera_frame} -> {self._arm_base_frame} available')
             
             # Log the static offset
-            tx = transform.transform.translation.x * 1000
-            ty = transform.transform.translation.y * 1000
-            tz = transform.transform.translation.z * 1000
-            self.get_logger().info(f'    Offset: ({tx:.1f}, {ty:.1f}, {tz:.1f}) mm')
+            tx = transform.transform.translation.x
+            ty = transform.transform.translation.y
+            tz = transform.transform.translation.z
+            self.get_logger().info(f'  Offset: ({tx:.4f}, {ty:.4f}, {tz:.4f}) m')
             
         except Exception as e:
-            self.get_logger().warn(f'  ✗ TF2: {self._camera_frame} -> {self._arm_base_frame} NOT available')
-            self.get_logger().warn(f'    Error: {e}')
-            self.get_logger().warn('    Make sure launch file is broadcasting static transforms!')
+            self.get_logger().warn(f'  TF2: {self._camera_frame} -> {self._arm_base_frame} NOT available')
+            self.get_logger().warn(f'  Error: {e}')
+            self.get_logger().warn('  Make sure launch file is broadcasting static transforms!')
 
     def _transform_point_tf2(self, x_src, y_src, z_src, target_frame, source_frame):
         """
         Transform a point from source_frame to target_frame using TF2.
         
         Args:
-            x_src, y_src, z_src: Point in source frame (mm)
+            x_src, y_src, z_src: Point in source frame (m)
             target_frame: Target frame name
             source_frame: Source frame name
             
         Returns:
-            (x_target, y_target, z_target): Point in target frame (mm)
+            (x_target, y_target, z_target): Point in target frame (m)
             Returns None if transform fails
         """
         try:
-            # Create PointStamped in source frame (convert mm to m)
+            # Create PointStamped in source frame (in meters for TF2)
             point_stamped = PointStamped()
             point_stamped.header.frame_id = source_frame
             point_stamped.header.stamp = self.get_clock().now().to_msg()
-            point_stamped.point.x = x_src / 1000.0
-            point_stamped.point.y = y_src / 1000.0
-            point_stamped.point.z = z_src / 1000.0
+            point_stamped.point.x = x_src
+            point_stamped.point.y = y_src
+            point_stamped.point.z = z_src
 
             # Lookup transform with timeout
             transform = self.tf_buffer.lookup_transform(
@@ -370,11 +328,10 @@ class MyCobotControllerTF2(Node):
             point_transformed = tf2_geometry_msgs.do_transform_point(
                 point_stamped, transform)
 
-            # Convert back to mm
             return (
-                point_transformed.point.x * 1000.0,
-                point_transformed.point.y * 1000.0,
-                point_transformed.point.z * 1000.0
+                point_transformed.point.x,
+                point_transformed.point.y,
+                point_transformed.point.z
             )
 
         except Exception as e:
@@ -387,10 +344,10 @@ class MyCobotControllerTF2(Node):
         Transform from camera frame to arm base frame, then compensate for gripper.
         
         Args:
-            x_cam, y_cam, z_cam: Coordinates in camera frame (mm)
+            x_cam, y_cam, z_cam: Coordinates in camera frame (m)
             
         Returns:
-            (x_flange, y_flange, z_flange): Flange coordinates for send_coords (mm)
+            (x_flange, y_flange, z_flange): Flange coordinates in base frame (m)
         """
         # Transform to arm base
         result = self._transform_point_tf2(
@@ -405,43 +362,76 @@ class MyCobotControllerTF2(Node):
 
         x_base, y_base, z_base = result
 
-        # Compensate for gripper offset
+        # Compensate for gripper offset in full 3D
         if self._compensate_gripper:
-            # Try to get gripper offset from TF2
             gripper_offset = self._get_gripper_offset_from_tf2()
+            
             if gripper_offset is not None:
-                z_flange = z_base - gripper_offset
-                self.get_logger().debug(
-                    f'  Gripper offset (TF2): {gripper_offset:.1f} mm')
+                dx, dy, dz = gripper_offset
             else:
-                # Fallback to configured offset
-                z_flange = z_base - self._gripper_offset_z
-                self.get_logger().debug(
-                    f'  Gripper offset (config): {self._gripper_offset_z:.1f} mm')
-        else:
-            z_flange = z_base
+                # Fallback to pure Z offset if TF2 fails
+                dx, dy, dz = 0.0, 0.0, self._gripper_offset_z
+                
+            # Convert end_rpy (degrees) to radians
+            rx = math.radians(self._end_rpy[0])
+            ry = math.radians(self._end_rpy[1])
+            rz = math.radians(self._end_rpy[2])
 
-        return x_base, y_base, z_flange
+            # Build Extrinsic XYZ rotation matrix (R = Rz * Ry * Rx)
+            cx, sx = math.cos(rx), math.sin(rx)
+            cy, sy = math.cos(ry), math.sin(ry)
+            cz, sz = math.cos(rz), math.sin(rz)
+
+            r00 = cy * cz
+            r01 = cz * sx * sy - cx * sz
+            r02 = sx * sz + cx * cz * sy
+
+            r10 = cy * sz
+            r11 = cx * cz + sx * sy * sz
+            r12 = cx * sy * sz - cz * sx
+
+            r20 = -sy
+            r21 = cy * sx
+            r22 = cx * cy
+
+            # Rotate the local offset to global base frame
+            rot_dx = r00 * dx + r01 * dy + r02 * dz
+            rot_dy = r10 * dx + r11 * dy + r12 * dz
+            rot_dz = r20 * dx + r21 * dy + r22 * dz
+            
+            # Compute P_flange = P_tip - rotated_offset
+            x_flange = x_base - rot_dx
+            y_flange = y_base - rot_dy
+            z_flange = z_base - rot_dz
+            
+            self.get_logger().debug(
+                f'  3D Gripper offset applied: vector=[{rot_dx:.4f}, {rot_dy:.4f}, {rot_dz:.4f}] m')
+        else:
+            x_flange, y_flange, z_flange = x_base, y_base, z_base
+
+        return x_flange, y_flange, z_flange
 
     def _get_gripper_offset_from_tf2(self):
         """
         Calculate gripper offset by querying TF2.
         
-        Returns Z offset from flange to gripper tip (in mm).
+        Returns 3D offset (dx, dy, dz) from flange to gripper tip (in m).
         Returns None if transform is not available.
         """
         try:
             # Get transform from flange to gripper tip
             transform = self.tf_buffer.lookup_transform(
-                target_frame=self._gripper_tip_frame,
-                source_frame=self._flange_frame,
+                target_frame=self._flange_frame,
+                source_frame=self._gripper_tip_frame,
                 time=rclpy.time.Time(),
                 timeout=Duration(seconds=0.5)
             )
 
-            # Extract Z offset (in mm)
-            z_offset = transform.transform.translation.z * 1000.0
-            return z_offset
+            # Extract full 3D offset (in m)
+            dx = transform.transform.translation.x
+            dy = transform.transform.translation.y
+            dz = transform.transform.translation.z
+            return (dx, dy, dz)
 
         except Exception as e:
             self.get_logger().debug(f'Gripper offset TF2 lookup failed: {e}')
@@ -471,15 +461,15 @@ class MyCobotControllerTF2(Node):
         target.y = y_base
         target.z = z_base
 
-        if not self._validate_coords(target):
-            return
-
         self.get_logger().info('-'*60)
         self.get_logger().info('[PICK REQUEST]')
-        self.get_logger().info(f'  Camera coords: ({msg.x:.1f}, {msg.y:.1f}, {msg.z:.1f}) mm')
-        self.get_logger().info(f'  Flange coords: ({x_base:.1f}, {y_base:.1f}, {z_base:.1f}) mm')
+        self.get_logger().info(f'  Camera coords: ({msg.x:.4f}, {msg.y:.4f}, {msg.z:.4f}) m')
+        self.get_logger().info(f'  Flange coords: ({x_base:.4f}, {y_base:.4f}, {z_base:.4f}) m')
         self.get_logger().info('-'*60)
 
+        if not self._validate_coords(target):
+            return
+        
         self._task_thread = threading.Thread(
             target=self._run_pick, args=(target,), daemon=True)
         self._task_thread.start()
@@ -504,14 +494,14 @@ class MyCobotControllerTF2(Node):
         target.y = y_base
         target.z = z_base
 
-        if not self._validate_coords(target):
-            return
-
         self.get_logger().info('-'*60)
         self.get_logger().info('[PLACE REQUEST]')
-        self.get_logger().info(f'  Camera coords: ({msg.x:.1f}, {msg.y:.1f}, {msg.z:.1f}) mm')
-        self.get_logger().info(f'  Flange coords: ({x_base:.1f}, {y_base:.1f}, {z_base:.1f}) mm')
+        self.get_logger().info(f'  Camera coords: ({msg.x:.4f}, {msg.y:.4f}, {msg.z:.4f}) m')
+        self.get_logger().info(f'  Flange coords: ({x_base:.4f}, {y_base:.4f}, {z_base:.4f}) m')
         self.get_logger().info('-'*60)
+
+        if not self._validate_coords(target):
+            return
 
         self._task_thread = threading.Thread(
             target=self._run_place, args=(target,), daemon=True)
@@ -521,12 +511,23 @@ class MyCobotControllerTF2(Node):
     # Validation
     # ======================================================================
     def _validate_coords(self, pt: Point) -> bool:
+        # Box limits check
         for axis, val in [('x', pt.x), ('y', pt.y), ('z', pt.z)]:
             lo, hi = self.COORD_LIMITS[axis]
             if val < lo or val > hi:
                 self.get_logger().error(
-                    f'Coordinate {axis}={val:.1f} out of range [{lo}, {hi}]')
+                    f'Coordinate {axis}={val:.4f} out of range [{lo}, {hi}]')
                 return False
+        
+        # Cylindrical radius check (prevent reaching corners impossible to reach)
+        # Based on empirical data, max radius from (0,0) is ~0.3m
+        radius = math.sqrt(pt.x**2 + pt.y**2)
+        max_radius = 0.32
+        if radius > max_radius:
+            self.get_logger().error(
+                f'Coordinate out of reach! XY Radius={radius:.4f} > {max_radius}')
+            return False
+
         return True
 
     # ======================================================================
@@ -640,9 +641,9 @@ class MyCobotControllerTF2(Node):
         except Exception as e:
             self.get_logger().debug(f'Joint state read failed: {e}')
 
-    def _make_coords(self, x, y, z):
-        """Create full coordinate list [x, y, z, rx, ry, rz] for send_coords."""
-        return [x, y, z] + list(self._end_rpy)
+    def _make_coords(self, x_m, y_m, z_m):
+        """Create full coordinate list [x, y, z, rx, ry, rz] FOR HARDWARE (in mm)."""
+        return [x_m * 1000.0, y_m * 1000.0, z_m * 1000.0] + list(self._end_rpy)
 
     # ======================================================================
     # PICK and PLACE phases
@@ -661,20 +662,20 @@ class MyCobotControllerTF2(Node):
             self._set_state(ArmState.MOVING_TO_PICK)
             self.get_logger().info('[1/6] Opening gripper')
             self._hw_set_gripper(0, g_spd)
-            time.sleep(1.0)
+            time.sleep(2.0)
 
             above_pick = self._make_coords(target.x, target.y, self._safe_z)
             self.get_logger().info(f'[2/6] Moving above target')
             self._hw_send_coords(above_pick, spd, 0)
             self._wait_until_done()
-            time.sleep(0.3)
+            time.sleep(3.0)
 
             self._set_state(ArmState.DESCENDING_PICK)
             pick_coords = self._make_coords(target.x, target.y, target.z)
-            self.get_logger().info(f'[3/6] Descending to pick')
+            self.get_logger().info(f'[3/6] Descending to pick position: ({target.x:.4f}, {target.y:.4f}, {target.z:.4f}) m')
             self._hw_send_coords(pick_coords, spd, 1)
             self._wait_until_done()
-            time.sleep(0.3)
+            time.sleep(2.0)
 
             self._set_state(ArmState.GRIPPING)
             self.get_logger().info('[4/6] Closing gripper')
@@ -719,7 +720,7 @@ class MyCobotControllerTF2(Node):
             self.get_logger().info(f'Returning to home: {self._home_angles}')
             self._hw_send_angles(self._home_angles, spd)
             self._wait_until_done()
-            time.sleep(0.5)
+            time.sleep(2.0)
 
             self._hw_focus_all()
             self._set_state(ArmState.HOLDING)
@@ -739,7 +740,7 @@ class MyCobotControllerTF2(Node):
         try:
             self._hw_set_gripper(0, self._gripper_speed)
             time.sleep(1.0)
-            self._hw_send_coord(3, self._safe_z, self._move_speed)
+            self._hw_send_coord(3, self._safe_z * 1000.0, self._move_speed)
             self._wait_until_done(timeout=10.0)
             self._hw_send_angles(self._home_angles, self._move_speed)
             self._wait_until_done(timeout=10.0)
