@@ -472,7 +472,8 @@ docking_server:
       plugin: 'opennav_docking::SimpleChargingDock'
       docking_threshold: 0.05
       staging_x_offset: -0.7
-      use_external_detection_pose: true
+      # 使用 DockRobot action 直接传入的 dock_pose（视觉计算后的 20cm 停靠点）
+      use_external_detection_pose: false
       use_battery_status: false # true
       use_stall_detection: false # true
 

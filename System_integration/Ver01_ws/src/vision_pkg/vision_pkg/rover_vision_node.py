@@ -11,8 +11,7 @@ from ultralytics import YOLO
 
 # ---------- SETTINGS ----------
 WINDOW_NAME = "Rover Vision: Size Validator"
-OV_MODEL_DIR = "/home/student04/test/vision_pkg/src/vision_pkg/vision_pkg/best_openvino_model"
-#TODO: change to dynamic parameter
+OV_MODEL_DIR = "/home/student21/Desktop/AERO62520_ws/personal_branch/Group12_team_space/System_integration/Ver01_ws/src/vision_pkg/vision_pkg/best_openvino_model"
 CONF_CUTOFF = 0.85
 IMG_SIZE = 640
 TARGET_CUBE_M = 0.02
