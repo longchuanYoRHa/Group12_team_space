@@ -37,9 +37,19 @@ from std_srvs.srv import Trigger
 from rclpy.parameter_client import AsyncParameterClient
 from rclpy.parameter import Parameter
 try:
-    from opennav_docking_msgs.action import DockRobot  # pyright: ignore[reportMissingImports]
-except Exception:  # 运行环境有该包；静态检查环境可能没有
-    DockRobot = None  # type: ignore
+    from nav2_msgs.action import DockRobot  # type: ignore[attr-defined]
+    _dockrobot_import_error = None
+except Exception as nav2_import_error:  # 新版本接口在 nav2_msgs 下
+    try:
+        from opennav_docking_msgs.action import DockRobot  # pyright: ignore[reportMissingImports]
+        _dockrobot_import_error = None
+    except Exception as docking_msgs_import_error:
+        DockRobot = None  # type: ignore
+        _dockrobot_import_error = (
+            'Failed to import DockRobot from both nav2_msgs.action and '
+            f'opennav_docking_msgs.action: nav2_msgs={nav2_import_error}, '
+            f'opennav_docking_msgs={docking_msgs_import_error}'
+        )
 
 from central_controller.task_manager_utils import (
     is_pose_in_blacklist as check_pose_in_blacklist,
@@ -153,6 +163,9 @@ class TaskManagerNodeV2(Node):
         if DockRobot is None:
             self.get_logger().warn(
                 'DockRobot action type not importable in this environment. '
+                'This environment should provide it from `nav2_msgs.action` '
+                'or older setups from `opennav_docking_msgs.action`. '
+                f'Original error: {_dockrobot_import_error}. '
                 'Docking via DockRobot will be unavailable.'
             )
         else:
