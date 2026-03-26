@@ -10,6 +10,34 @@ import math
 import geometry_msgs.msg as geometry_msgs
 
 
+def quat_yaw(q: geometry_msgs.Quaternion) -> float:
+    """Return yaw (rad) from a quaternion."""
+    return math.atan2(
+        2.0 * (q.w * q.z + q.x * q.y),
+        1.0 - 2.0 * (q.y * q.y + q.z * q.z),
+    )
+
+
+def normalize_angle(a: float) -> float:
+    """Normalize angle to (-pi, pi]."""
+    while a > math.pi:
+        a -= 2.0 * math.pi
+    while a < -math.pi:
+        a += 2.0 * math.pi
+    return a
+
+
+def quaternion_from_yaw(yaw: float) -> geometry_msgs.Quaternion:
+    """Create a quaternion representing yaw rotation (rad)."""
+    half = yaw * 0.5
+    q = geometry_msgs.Quaternion()
+    q.x = 0.0
+    q.y = 0.0
+    q.z = math.sin(half)
+    q.w = math.cos(half)
+    return q
+
+
 def is_pose_in_blacklist(position, object_blacklist, blacklist_radius):
     """
     Check if a position is in the blacklist.
@@ -35,12 +63,13 @@ def is_pose_in_blacklist(position, object_blacklist, blacklist_radius):
 
 
 def compute_pregrasp_pose(target_pose, distance, robot_x, robot_y,
-                          frame_id='map', stamp=None):
+                          frame_id='map', stamp=None, yaw_offset=0.0):
     """
     Compute pregrasp/preplace pose.
 
-    Generate a pose in front of target at given distance, facing target.
-    Used for object grasp and bin place navigation.
+    Generate a pose in front of target at given distance, facing target
+    (yaw from goal toward target), plus optional yaw_offset (e.g. math.pi
+    to flip heading 180° for vision-triggered goals).
 
     Args:
         target_pose: geometry_msgs.msg.PoseStamped, target pose (map frame)
@@ -49,6 +78,7 @@ def compute_pregrasp_pose(target_pose, distance, robot_x, robot_y,
         robot_y: float, robot current y (map frame)
         frame_id: str, output pose frame_id, default 'map'
         stamp: optional, header.stamp, if None then not set
+        yaw_offset: rad, added to computed facing-target yaw (default 0)
 
     Returns:
         geometry_msgs.msg.PoseStamped: pregrasp/preplace pose (only position and orientation are valid)
@@ -77,7 +107,7 @@ def compute_pregrasp_pose(target_pose, distance, robot_x, robot_y,
         target_pose.pose.position.y - goal_pose.pose.position.y,
         target_pose.pose.position.x - goal_pose.pose.position.x,
     )
-    goal_pose.pose.orientation.z = math.sin(yaw / 2.0)
-    goal_pose.pose.orientation.w = math.cos(yaw / 2.0)
+    yaw = normalize_angle(yaw + yaw_offset)
+    goal_pose.pose.orientation = quaternion_from_yaw(yaw)
 
     return goal_pose

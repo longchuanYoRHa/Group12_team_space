@@ -164,7 +164,7 @@ controller_server:
         cost_weight: 2.81 #3.81
         near_collision_cost: 253
         critical_cost: 300.0
-        consider_footprint: true # change to footprint model for square robot
+        consider_footprint: false
         collision_cost: 1000000.0
         near_goal_distance: 1.0
         trajectory_point_step: 2
@@ -207,15 +207,15 @@ local_costmap:
       width: 3
       height: 3
       resolution: 0.05
-      # 与 footprint 一致；若仅用圆形模型，应 ≥ 实际外接半径（否则 Smac/MPPI 会报警）
-      footprint: "[[0.212, 0.2225], [0.212, -0.2225], [-0.212, -0.2225], [-0.212, 0.2225]]" # change to square robot footprint
+      # 圆形机器人模型（与 global 一致）；须 ≥ 实车/仿真外廓半径
+      robot_radius: 0.35
       plugins: ["voxel_layer", "inflation_layer"]
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         # 越小：同一 inflation_radius 内代价衰减越慢 → RViz 里渐变层更“宽”、过渡更柔和
         cost_scaling_factor: 9.0
-        # 浅蓝过渡带总宽度（障碍边沿到自由空间）约 15 cm；须 ≥ 足迹外接圆半径
-        inflation_radius: 0.322
+        # 须 ≥ robot_radius
+        inflation_radius: 0.36
       voxel_layer:
         plugin: "nav2_costmap_2d::VoxelLayer"
         enabled: True
@@ -248,8 +248,7 @@ global_costmap:
       publish_frequency: 1.0
       global_frame: map
       robot_base_frame: base_link
-      # 车半径约 35 cm（圆形模型）；与 footprint 二选一时以 footprint 为准
-      footprint: "[[0.212, 0.2225], [0.212, -0.2225], [-0.212, -0.2225], [-0.212, 0.2225]]" # change to square robot footprint
+      robot_radius: 0.35
       resolution: 0.05
       track_unknown_space: true
       plugins: ["static_layer", "obstacle_layer", "inflation_layer"]
@@ -437,14 +436,13 @@ collision_monitor:
     stop_pub_timeout: 2.0
     # Polygons represent zone around the robot for "stop", "slowdown" and "limit" action types,
     # and robot footprint for "approach" action type.
-    polygons: ["FootprintApproach"]
-    FootprintApproach:
-      type: "polygon"
+    polygons: ["CircleApproach"]
+    CircleApproach:
+      type: "circle"
       action_type: "approach"
-      footprint_topic: "/local_costmap/published_footprint"
+      radius: 0.35
       time_before_collision: 1.2
       simulation_time_step: 0.1
-      min_points: 6
       visualize: False
       enabled: True
     observation_sources: ["scan"]

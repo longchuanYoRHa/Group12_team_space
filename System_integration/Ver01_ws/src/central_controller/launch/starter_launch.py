@@ -110,7 +110,7 @@ def generate_launch_description():
     )
 
     # Launch nav2_bringup navigation_launch.py
-    nav2_params_file = PathJoinSubstitution([controller_pkg_dir, 'config', 'nav2_params.yaml'])
+    nav2_params_file = PathJoinSubstitution([controller_pkg_dir, 'config', 'nav2_params_radius.yaml'])
 
     nav2_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -305,7 +305,27 @@ def generate_launch_description():
         )
     )
 
-    # 8. After /map topic available, start Nav2
+    # Reset odometry before starting Nav2 (Leo Rover firmware service: /reset_odometry)
+    reset_odometry_cmd = ExecuteProcess(
+        cmd=[
+            'bash',
+            '-c',
+            'timeout=15; elapsed=0; '
+            'until ros2 service list | grep -q "^/reset_odometry$"; do '
+            '  echo "Waiting for /reset_odometry service... ($elapsed/$timeout seconds)"; '
+            '  sleep 1; elapsed=$((elapsed+1)); '
+            '  if [ $elapsed -ge $timeout ]; then '
+            '    echo "WARN: /reset_odometry service not available after $timeout seconds; skipping reset"; exit 0; '
+            '  fi; '
+            'done; '
+            'echo "Calling /reset_odometry ..."; '
+            'ros2 service call /reset_odometry std_srvs/srv/Trigger "{}" && '
+            'echo "/reset_odometry call done"',
+        ],
+        output='screen',
+    )
+
+    # 8. After /map topic available, reset odom once, then start Nav2
     nav2_after_map = TimerAction(
         period=0.1,  # short delay
         actions=[nav2_launch]
@@ -314,7 +334,14 @@ def generate_launch_description():
     wait_for_map_handler = RegisterEventHandler(
         OnProcessExit(
             target_action=wait_for_map_cmd,
-            on_exit=[nav2_after_map]
+            on_exit=[reset_odometry_cmd]
+        )
+    )
+
+    reset_odometry_handler = RegisterEventHandler(
+        OnProcessExit(
+            target_action=reset_odometry_cmd,
+            on_exit=[nav2_after_map],
         )
     )
 
@@ -399,7 +426,8 @@ def generate_launch_description():
         configure_slam_handler,      # after configuring, wait for configuration to complete
         wait_for_slam_configured_handler,  # after configuring, activate SLAM
         activate_slam_handler,       # after activating, wait for /map
-        wait_for_map_handler,        # after /map available, start Nav2
+        wait_for_map_handler,        # after /map available, reset odom before Nav2
+        reset_odometry_handler,      # after reset odom, start Nav2
         nav2_handler,                # after /map available, delay wait for navigate_to_pose action
         wait_for_nav_action_handler, # after navigate_to_pose action available, start explore
         # explore_handler,              # after action available, delay start task manager and rviz

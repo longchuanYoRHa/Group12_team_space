@@ -36,10 +36,17 @@ import std_msgs.msg as std_msgs
 from std_srvs.srv import Trigger
 from rclpy.parameter_client import AsyncParameterClient
 from rclpy.parameter import Parameter
+try:
+    from opennav_docking_msgs.action import DockRobot  # pyright: ignore[reportMissingImports]
+except Exception:  # 运行环境有该包；静态检查环境可能没有
+    DockRobot = None  # type: ignore
 
 from central_controller.task_manager_utils import (
     is_pose_in_blacklist as check_pose_in_blacklist,
     compute_pregrasp_pose,
+    quat_yaw,
+    normalize_angle,
+    quaternion_from_yaw,
 )
 from central_controller.detect_objects_in_pgm_map import (
     get_interest_points_from_pgm,
@@ -139,6 +146,22 @@ class TaskManagerNodeV2(Node):
         self.nav2_goal_handle = None
         self.current_nav_purpose = NavPurpose.NONE
 
+        # Docking server action client（Nav2 Docking Server / opennav_docking）
+        self.declare_parameter('dock_action_name', 'dock_robot')
+        self.declare_parameter('dock_type', 'simple_charging_dock')
+        self.dock_client = None
+        if DockRobot is None:
+            self.get_logger().warn(
+                'DockRobot action type not importable in this environment. '
+                'Docking via DockRobot will be unavailable.'
+            )
+        else:
+            self.dock_client = ActionClient(
+                self, DockRobot, self.get_parameter('dock_action_name').value
+            )
+        self._dock_goal_handle = None
+        self._dock_result_future = None
+
         # ========== 发布者 ==========
         # 与 custom_explore_node 约定：True 开始/恢复探索，False 暂停（节点会 cancel nav2 goals）
         self.explore_control_pub = self.create_publisher(
@@ -231,6 +254,13 @@ class TaskManagerNodeV2(Node):
             self._handle_get_state_service,
         )
 
+        # ========== Service client：reset odometry（Leo Rover firmware） ==========
+        self._reset_odom_client = self.create_client(Trigger, '/reset_odometry')
+        self._reset_odom_after_nav2_done = False
+        self._reset_odom_after_nav2_started_at = None  # rclpy.time.Time
+        self._reset_odom_after_nav2_future = None
+        self._reset_odom_after_nav2_last_warn_sec = 0.0
+
         self.get_logger().info('Task manager V2 node initialized')
 
         # ========== map 坐标 CSV（object / bin / PGM）==========
@@ -261,36 +291,10 @@ class TaskManagerNodeV2(Node):
         self._docking_active = False
         self._docking_phase = 'rotate'  # 'rotate' -> 'drive'
         self._last_docking_target_base_m = None  # (x, y) in meters (base_link)
+        self._dock_goal_sent = False
         self._backup_end_time = None
         self._backup_next_state = None  # TaskState
         self._backup_after_restore_explore_resume = None  # bool | None
-
-    # ========================= 通用工具函数 =========================
-
-    @staticmethod
-    def _quat_yaw(q: geometry_msgs.Quaternion) -> float:
-        return math.atan2(
-            2.0 * (q.w * q.z + q.x * q.y),
-            1.0 - 2.0 * (q.y * q.y + q.z * q.z),
-        )
-
-    @staticmethod
-    def _normalize_angle(a: float) -> float:
-        while a > math.pi:
-            a -= 2.0 * math.pi
-        while a < -math.pi:
-            a += 2.0 * math.pi
-        return a
-
-    @staticmethod
-    def _quaternion_from_yaw(yaw: float) -> geometry_msgs.Quaternion:
-        half = yaw * 0.5
-        q = geometry_msgs.Quaternion()
-        q.x = 0.0
-        q.y = 0.0
-        q.z = math.sin(half)
-        q.w = math.cos(half)
-        return q
 
     def _handle_get_state_service(self, request, response):
         """
@@ -387,10 +391,44 @@ class TaskManagerNodeV2(Node):
             pose_stamped.pose.orientation.w = 1.0
             return pose_stamped
 
+    def _point_to_pose_stamped_in_frame(self, point_msg: geometry_msgs.Point, target_frame: str):
+        """
+        将相机坐标系下的点变换到 target_frame，并返回 PoseStamped（orientation 置为单位四元数）。
+        """
+        frame_id = self.get_parameter('camera_frame_id').value
+        point_stamped = geometry_msgs.PointStamped()
+        point_stamped.header.frame_id = frame_id
+        point_stamped.header.stamp = self.get_clock().now().to_msg()
+        point_stamped.point = point_msg
+        transform = self.tf_buffer.lookup_transform(
+            target_frame, frame_id, rclpy.time.Time(),
+            timeout=rclpy.duration.Duration(seconds=0.5),
+        )
+        point_in_target = tf2_geometry_msgs.do_transform_point(point_stamped, transform)
+        pose_stamped = geometry_msgs.PoseStamped()
+        pose_stamped.header.frame_id = target_frame
+        pose_stamped.header.stamp = self.get_clock().now().to_msg()
+        pose_stamped.pose.position = point_in_target.point
+        pose_stamped.pose.orientation.w = 1.0
+        return pose_stamped
+
     def _get_robot_xy_in_map(self):
         try:
             transform = self.tf_buffer.lookup_transform(
                 'map', 'base_link', rclpy.time.Time()
+            )
+            return (
+                transform.transform.translation.x,
+                transform.transform.translation.y,
+            )
+        except Exception:
+            return (0.0, 0.0)
+
+    def _get_robot_xy_in_frame(self, target_frame: str):
+        try:
+            transform = self.tf_buffer.lookup_transform(
+                target_frame, 'base_link', rclpy.time.Time(),
+                timeout=rclpy.duration.Duration(seconds=0.5),
             )
             return (
                 transform.transform.translation.x,
@@ -564,6 +602,50 @@ class TaskManagerNodeV2(Node):
             self.get_logger().warn('Waiting for Nav2 server...')
             return
 
+        # 在 INIT：等待 Nav2 后重置一次 odom（/reset_odometry），再继续保存 home / 进入探索
+        if not self._reset_odom_after_nav2_done:
+            now = self.get_clock().now()
+            if self._reset_odom_after_nav2_started_at is None:
+                self._reset_odom_after_nav2_started_at = now
+
+            elapsed = (now - self._reset_odom_after_nav2_started_at).nanoseconds / 1e9
+            if elapsed > 8.0:
+                self.get_logger().warn(
+                    'INIT: /reset_odometry not completed within 8s; continue without odom reset.'
+                )
+                self._reset_odom_after_nav2_done = True
+            elif self._reset_odom_after_nav2_future is not None:
+                if self._reset_odom_after_nav2_future.done():
+                    try:
+                        resp = self._reset_odom_after_nav2_future.result()
+                        if resp is not None and getattr(resp, 'success', False):
+                            self.get_logger().info(
+                                f'INIT: /reset_odometry success: {resp.message}'
+                            )
+                        else:
+                            msg = '' if resp is None else getattr(resp, 'message', '')
+                            self.get_logger().warn(
+                                f'INIT: /reset_odometry returned failure: {msg}'
+                            )
+                    except Exception as e:
+                        self.get_logger().warn(f'INIT: /reset_odometry call failed: {e}')
+                    self._reset_odom_after_nav2_done = True
+                else:
+                    return
+            else:
+                if not self._reset_odom_client.service_is_ready():
+                    sec = now.nanoseconds / 1e9
+                    if sec - self._reset_odom_after_nav2_last_warn_sec >= 1.0:
+                        self.get_logger().warn('INIT: waiting for /reset_odometry service...')
+                        self._reset_odom_after_nav2_last_warn_sec = sec
+                    return
+
+                self.get_logger().info('INIT: calling /reset_odometry ...')
+                self._reset_odom_after_nav2_future = self._reset_odom_client.call_async(
+                    Trigger.Request()
+                )
+                return
+
         try:
             transform = self.tf_buffer.lookup_transform(
                 'map', 'base_link', rclpy.time.Time()
@@ -586,7 +668,7 @@ class TaskManagerNodeV2(Node):
                 goal.pose.position.y = self.home_pose.pose.position.y + oy
                 goal.pose.position.z = self.home_pose.pose.position.z
                 # 朝向 map −x：yaw = π
-                goal.pose.orientation = self._quaternion_from_yaw(math.pi)
+                goal.pose.orientation = quaternion_from_yaw(math.pi)
                 self.current_state = TaskState.PRE_EXPLORE_SPIN
                 self.get_logger().info(
                     f'PRE_EXPLORE_NAV: map goal ({goal.pose.position.x:.3f}, {goal.pose.position.y:.3f}), '
@@ -715,12 +797,13 @@ class TaskManagerNodeV2(Node):
                 f'{pose_stamped.pose.position.y:.2f}), nav to pregrasp.'
             )
 
-        # 计算并发送预抓取导航目标
+        # 计算并发送预抓取导航目标（在“指向目标”基础上转 180°，与底盘/相机实际朝前一致）
         robot_x, robot_y = self._get_robot_xy_in_map()
         pregrasp_distance = self.get_parameter('pregrasp_distance').value
         goal_pose = compute_pregrasp_pose(
             self.object_pose, pregrasp_distance, robot_x, robot_y,
-            frame_id='map', stamp=self.get_clock().now().to_msg()
+            frame_id='map', stamp=self.get_clock().now().to_msg(),
+            yaw_offset=math.pi,
         )
         self.current_state = TaskState.NAV_TO_OBJECT_PREGRASP
         self._send_nav_goal(goal_pose, NavPurpose.OBJECT_PREGRASP)
@@ -853,7 +936,8 @@ class TaskManagerNodeV2(Node):
         preplace_distance = self.get_parameter('preplace_distance').value
         goal_pose = compute_pregrasp_pose(
             self.bin_pose, preplace_distance, robot_x, robot_y,
-            frame_id='map', stamp=self.get_clock().now().to_msg()
+            frame_id='map', stamp=self.get_clock().now().to_msg(),
+            yaw_offset=math.pi,
         )
         self.current_state = TaskState.NAV_TO_BIN_PREPLACE
         self._send_nav_goal(goal_pose, NavPurpose.BIN_PREPLACE)
@@ -1063,6 +1147,9 @@ class TaskManagerNodeV2(Node):
         self._docking_active = False
         self._docking_phase = 'rotate'
         self._last_docking_target_base_m = None
+        self._dock_goal_sent = False
+        self._dock_goal_handle = None
+        self._dock_result_future = None
         self.wait_at_point_start_time = time.monotonic()
         self.get_logger().info(
             f'Entered PRECISION_ALIGN (source={source_purpose.value}); waiting for vision trigger.'
@@ -1114,73 +1201,117 @@ class TaskManagerNodeV2(Node):
         if (not is_object) and self.cargo_state != CargoState.HAS_OBJECT:
             return
 
-        target_mm = self._point_camera_to_base_link_mm(point_msg)
-        if target_mm is None:
+        # 仅发送一次 DockRobot goal；后续由 action result 驱动状态切换
+        if self._dock_goal_sent:
             return
-        target_m = (target_mm.x / 1000.0, target_mm.y / 1000.0)
-        self._last_docking_target_base_m = target_m
+
+        if self.dock_client is None:
+            return
+        if not self.dock_client.wait_for_server(timeout_sec=0.2):
+            self.get_logger().warn('PRECISION_ALIGN: DockRobot action server not ready yet.')
+            return
 
         # 在兴趣点触发时，下一状态由目标类型决定（替代 WAIT_AT_INTEREST_POINT 的功能）
         if self._precision_align_source_purpose == NavPurpose.INTEREST_POINT:
             self._precision_align_next_state = TaskState.GRASP if is_object else TaskState.PLACE_IN_BIN
 
-        if not self._docking_active:
-            self.get_logger().info('PRECISION_ALIGN: vision trigger received, disabling inflation and start docking.')
-            self._disable_local_inflation_if_needed()
-            self._docking_active = True
-            self._docking_phase = 'rotate'
+        stop_dist = float(self.get_parameter('docking_stop_distance_m').value)
+        stop_dist = max(0.0, stop_dist)
+
+        try:
+            # 视觉点 -> odom（与 docking_server.fixed_frame 对齐）
+            cube_pose_odom = self._point_to_pose_stamped_in_frame(point_msg, 'odom')
+            robot_x, robot_y = self._get_robot_xy_in_frame('odom')
+            cx = cube_pose_odom.pose.position.x
+            cy = cube_pose_odom.pose.position.y
+            dx = cx - robot_x
+            dy = cy - robot_y
+            dist = (dx * dx + dy * dy) ** 0.5
+            if dist < 1e-6:
+                self.get_logger().warn('PRECISION_ALIGN: invalid cube distance; skip DockRobot goal.')
+                return
+
+            # 目标停靠点：沿 robot->cube 方向回退 stop_dist
+            ux = dx / dist
+            uy = dy / dist
+            tx = cx - ux * stop_dist
+            ty = cy - uy * stop_dist
+
+            target_pose = geometry_msgs.PoseStamped()
+            target_pose.header.frame_id = 'odom'
+            target_pose.header.stamp = self.get_clock().now().to_msg()
+            target_pose.pose.position.x = tx
+            target_pose.pose.position.y = ty
+            target_pose.pose.position.z = 0.0
+            target_pose.pose.orientation = quaternion_from_yaw(math.atan2(cy - ty, cx - tx))
+        except Exception as e:
+            self.get_logger().error(f'PRECISION_ALIGN: build DockRobot goal failed: {e}')
+            return
+
+        self.get_logger().info(
+            f'PRECISION_ALIGN: vision trigger received, sending DockRobot goal '
+            f'(stop_dist={stop_dist:.2f} m, target=({tx:.3f},{ty:.3f}) odom).'
+        )
+
+        self._disable_local_inflation_if_needed()
+
+        goal = DockRobot.Goal()
+        goal.use_dock_id = False
+        goal.dock_pose = target_pose
+        goal.dock_type = self.get_parameter('dock_type').value
+        goal.navigate_to_staging_pose = False
+        goal.max_staging_time = 0.0
+
+        send_goal_future = self.dock_client.send_goal_async(goal)
+        send_goal_future.add_done_callback(self._dock_goal_response_callback)
+        self._dock_goal_sent = True
+
+    def _dock_goal_response_callback(self, future):
+        try:
+            goal_handle = future.result()
+        except Exception as e:
+            self.get_logger().error(f'DockRobot goal response error: {e}')
+            self._dock_goal_sent = False
+            return
+
+        if not goal_handle.accepted:
+            self.get_logger().warn('DockRobot goal rejected.')
+            self._dock_goal_sent = False
+            return
+
+        self.get_logger().info('DockRobot goal accepted.')
+        self._dock_goal_handle = goal_handle
+        self._dock_result_future = goal_handle.get_result_async()
 
     def _precision_align_control_step(self):
-        if not self._docking_active or self._last_docking_target_base_m is None:
+        if not self._dock_goal_sent or self._dock_result_future is None:
             return
 
-        x_m, y_m = self._last_docking_target_base_m
-        stop_dist = float(self.get_parameter('docking_stop_distance_m').value)
-        dist = (x_m * x_m + y_m * y_m) ** 0.5
+        if not self._dock_result_future.done():
+            return
 
-        if dist <= stop_dist:
-            self.get_logger().info(f'PRECISION_ALIGN: reached stop distance ({dist:.3f} m).')
-            self._stop_cmd_vel()
-            self._docking_active = False
+        try:
+            result = self._dock_result_future.result().result
+        except Exception as e:
+            self.get_logger().error(f'PRECISION_ALIGN: DockRobot result error: {e}')
+            self._dock_goal_sent = False
+            self._dock_goal_handle = None
+            self._dock_result_future = None
+            return
 
-            # 对位达标 -> 进入下一状态（不在此处恢复 costmap，等待机械臂动作后统一恢复）
+        if result.success:
+            self.get_logger().info('PRECISION_ALIGN: DockRobot succeeded.')
             if self._precision_align_next_state is not None:
                 self.current_state = self._precision_align_next_state
-                self._arm_cmd_sent = False  # 确保下一状态能触发一次机械臂命令
+                self._arm_cmd_sent = False
             else:
-                # 理论上不会发生：OBJECT/BIN 预位都传入 next_state
                 self.get_logger().warn('PRECISION_ALIGN: next state is None; staying in PRECISION_ALIGN.')
-            return
+        else:
+            self.get_logger().warn(f'PRECISION_ALIGN: DockRobot failed (error_code={result.error_code}).')
 
-        y_tol = float(self.get_parameter('docking_y_tolerance_m').value)
-        kp_yaw = float(self.get_parameter('docking_yaw_kp').value)
-        wz_max = float(self.get_parameter('docking_angular_speed_max_rps').value)
-        v_lin = float(self.get_parameter('docking_linear_speed_mps').value)
-
-        twist = geometry_msgs.Twist()
-
-        # 先原地调整左右（通过转向把目标 y 收敛到 0）
-        if self._docking_phase == 'rotate':
-            if abs(y_m) <= y_tol:
-                self._docking_phase = 'drive'
-                self._stop_cmd_vel()
-                return
-            wz = kp_yaw * y_m
-            wz = max(-wz_max, min(wz_max, wz))
-            twist.angular.z = wz
-            twist.linear.x = 0.0
-            self.cmd_vel_pub.publish(twist)
-            return
-
-        # 后直行：尽量缓慢前进；若横向误差又变大，回到 rotate
-        if abs(y_m) > (2.0 * y_tol):
-            self._docking_phase = 'rotate'
-            self._stop_cmd_vel()
-            return
-
-        twist.linear.x = max(0.0, min(v_lin, v_lin))
-        twist.angular.z = 0.0
-        self.cmd_vel_pub.publish(twist)
+        self._dock_goal_sent = False
+        self._dock_goal_handle = None
+        self._dock_result_future = None
 
     def _start_backup_after_action(self, next_state: TaskState, explore_resume_after_restore):
         """
