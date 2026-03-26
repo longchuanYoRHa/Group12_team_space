@@ -210,10 +210,10 @@ base_link
 ```bash
 # From NUC, copy the source to Pi
 scp -r ~/mycobot_ws/src/my_cobot_control elephant@10.0.1.3:~/ros2_ws/src/
+scp -r ~/Desktop/Group12_team_space/Manipulator/src/my_cobot_control elephant@10.0.1.3:~/ros2_ws/src/
 
 # SSH into Pi
 ssh elephant@10.0.1.3
-# password: trunk
 
 # syc time
 sudo date -s "$(ssh leo-rover-12@10.0.1.4 'date -u +%Y-%m-%d\ %H:%M:%S.%N')"
@@ -235,6 +235,9 @@ source install/setup.bash
 
 ### Launch the arm controller
 ```bash
+# Control node without TF2 (use raw coordinates in arm frame)
+ros2 launch my_cobot_control arm_controller.launch.py
+
 # On Pi — start the controller (all nodes under /arm namespace)
 ros2 launch my_cobot_control mycobot_with_tf2.launch.py
 
@@ -256,6 +259,9 @@ When no hardware is connected (no `/dev/ttyAMA0`), the controller automatically 
 cd ~/mycobot_ws
 colcon build --packages-select my_cobot_control
 source install/setup.bash
+
+# Control node without TF2 (use raw coordinates in arm frame)
+ros2 launch my_cobot_control arm_controller.launch.py
 
 # Default: real hardware + base_link->g_base
 ros2 launch my_cobot_control mycobot_with_tf2.launch.py
@@ -294,59 +300,7 @@ ros2 topic pub --once /arm/target_place geometry_msgs/msg/Point "{x: 66.7, y: -2
 
 ```
 
-### Test 2: Pick only (verify HOLDING state)
-```bash
-# Send pick command
-ros2 topic pub --once /arm/target_pick geometry_msgs/msg/Point "{x: 202.2, y: -129.3, z: 237.9}"
-
-# Verify arm enters HOLDING state
-ros2 topic echo /arm/status --once
-# Expected output: data: "holding"
-
-# Verify grip feedback
-ros2 topic echo /arm/gripper_status --once
-# Expected output: data: "object_held"
-```
-
-### Test 3: Rejected commands (state guard)
-```bash
-# Try to place when not holding — should be rejected
-ros2 topic pub --once /arm/target_place geometry_msgs/Point "{x: 23.8, y: -245.6, z: 102.0}"
-# Log: "Ignoring target_place (state=IDLE, need HOLDING)"
-
-# Try to pick when already picking — should be rejected
-ros2 topic pub --once /arm/target_pick geometry_msgs/Point "{x: 162.5, y: -134.8, z: 87.6}"
-# (send twice quickly, second one rejected)
-```
-
-### Test 4: Out-of-range coordinate validation
-```bash
-# Send coordinates outside workspace limits
-ros2 topic pub --once /arm/target_pick geometry_msgs/Point "{x: 999.0, y: 0.0, z: 100.0}"
-# Log: "Coordinate x=999.0 out of range [-281.45, 281.45]"
-```
-
-### Test 5: Monitor joint states
-```bash
-# View real-time joint positions (10 Hz)
-ros2 topic echo /arm/joint_states
-
-# Check topic frequency
-ros2 topic hz /arm/joint_states
-```
-
-### Test 6: List all arm topics
-```bash
-ros2 topic list | grep arm
-# Expected:
-#   /arm/gripper_status
-#   /arm/joint_states
-#   /arm/status
-#   /arm/target_pick
-#   /arm/target_place
-```
-
-### Test 7: TF2 Transform Validation
+### Test 2: TF2 Transform Validation
 ```bash
 # Check TF2 tree structure
 cd ~/mycobot_ws  #or cd ~/ros2_ws
@@ -360,26 +314,15 @@ python3 scripts/test_tf2_transform.py
 # Visualize in RViz (optional, requires rviz launch)
 ros2 launch my_cobot_control mycobot_with_rviz.launch.py
 
-# Send pick command in camera frame (will be transformed to arm frame)
-ros2 topic pub --once /arm/target_pick geometry_msgs/msg/Point "{x: -63.1, y: -14.1, z: 196.0}"
+# Send pick command in camera frame (will be transformed to arm frame) in meter
+ros2 topic pub --once /arm/target_pick geometry_msgs/msg/Point "{x: -0.006982066202908754, y: -0.009772047400474548, z: 0.18200001120567322}"
 
-# Send place command in camera frame
-ros2 topic pub --once /arm/target_place geometry_msgs/msg/Point "{x: 30.5, y: -50.2, z: 123.7}"
+# Send place command in camera frame in meter
+ros2 topic pub --once /arm/target_place geometry_msgs/msg/Point "{x: -0.042749661952257156, y: 0.00038108081207610667, z: 0.15700000524520874}"
 ```
 
-## 3.6 Standalone Calibration Test (No ROS 2)
 
-A standalone script is available for testing pick-and-place with calibrated coordinates directly on the Pi, **without ROS 2**:
-
-```bash
-# Run directly with Python (requires pymycobot)
-cd ~/ros2_ws/scripts
-python3 test_calibration_pick_place.py
-```
-
-This script uses hardcoded calibration data (home/pickup/place) and runs a full cycle for hardware validation.
-
-## 3.7 Calibration
+## 3.5 Calibration
 
 Use the calibration tool to record new home/pickup/place positions by dragging the arm manually:
 
@@ -396,15 +339,3 @@ ros2 run my_cobot_control mycobot_controller --ros-args \
   -r __ns:=/arm \
   -p calibration_file:=/path/to/calibration_2026-02-25_18-26-52.json
 ```
-
-## 3.8 Troubleshooting
-
-| Problem | Cause | Fix |
-|---|---|---|
-| `No hardware -- running in MOCK mode` | No `/dev/ttyAMA0` found | Run on Pi, or use mock mode for dev |
-| `Ignoring target_place (need HOLDING)` | Place sent before pick completed | Wait for `status == "holding"` first |
-| `Grip failed -- aborting pick` | Object not detected by gripper | Check gripper torque, object size, pick height |
-| `Object lost during lift` | Grip too weak or object slipped | Increase `gripper_torque` parameter (up to 980) |
-| `Coordinate x=... out of range` | Target outside workspace | Check coordinate frame, values must be in mm |
-| Build error: `shebang too long` | venv path hardcoded on Pi | `setup.py` auto-detects venv; rebuild |
-|Timesync issue (hardware clock drift) | Arm movements erratic | Sync Pi clock with NUC: `ssh elephant@10.0.1.4 "sudo date -s '$(date -u +%m%d%H%M%Y.%S)'"`|

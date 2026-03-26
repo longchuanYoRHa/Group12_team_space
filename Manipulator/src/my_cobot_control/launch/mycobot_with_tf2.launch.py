@@ -53,14 +53,14 @@ def generate_launch_description():
     use_mock_arg = DeclareLaunchArgument(
         'use_mock',
         default_value='false',  # Default to false for real hardware
-        description='Use mock/GUI for joint states (true) or real hardware (false)'
+        description='Mock mode: true=simulation/dev (no hardware), false=real hardware'
     )
 
     base_x_arg = DeclareLaunchArgument(
-        'base_x', default_value='0.08399',
+        'base_x', default_value='0.05500',
         description='Base-to-arm X offset for base_link->g_base (m)')
     base_y_arg = DeclareLaunchArgument(
-        'base_y', default_value='0.06494',
+        'base_y', default_value='0.03594',
         description='Base-to-arm Y offset for base_link->g_base (m)')
     base_z_arg = DeclareLaunchArgument(
         'base_z', default_value='0.01097',
@@ -76,22 +76,22 @@ def generate_launch_description():
         description='Base-to-arm yaw for base_link->g_base (rad)')
 
     base_to_camera_x_arg = DeclareLaunchArgument(
-        'base_to_camera_x', default_value='0.14813',
+        'base_to_camera_x', default_value='0.158',
         description='Base-to-camera X offset for base_link->camera_link (m)')
     base_to_camera_y_arg = DeclareLaunchArgument(
-        'base_to_camera_y', default_value='0.027',
+        'base_to_camera_y', default_value='0.007',
         description='Base-to-camera Y offset for base_link->camera_link (m)')
     base_to_camera_z_arg = DeclareLaunchArgument(
-        'base_to_camera_z', default_value='0.05957',
+        'base_to_camera_z', default_value='0.081',
         description='Base-to-camera Z offset for base_link->camera_link (m)')
     base_to_camera_roll_arg = DeclareLaunchArgument(
-        'base_to_camera_roll', default_value='1.9199', # 20 + 90 degrees in radians
+        'base_to_camera_roll', default_value='-1.9199', # 20 + 90 degrees in radians
         description='Base-to-camera roll for base_link->camera_link (rad)')
     base_to_camera_pitch_arg = DeclareLaunchArgument(
         'base_to_camera_pitch', default_value='0.0',
         description='Base-to-camera pitch for base_link->camera_link (rad)')
     base_to_camera_yaw_arg = DeclareLaunchArgument(
-        'base_to_camera_yaw', default_value='1.5708', # 90 degrees in radians
+        'base_to_camera_yaw', default_value='-1.5708', # 90 degrees in radians
         description='Base-to-camera yaw for base_link->camera_link (rad)')
 
     # ========================================================================
@@ -176,8 +176,8 @@ def generate_launch_description():
         name='gripper_tip_tf',
         arguments=[
             '--x', '0.0', 
-            '--y', '0.0', 
-            '--z', '0.079',  # 34mm + 45mm
+            '--y', '0.010',  # 10mm offset from flange center
+            '--z', '0.095',  # 95mm offset from flange center
             '--yaw', '0.0', 
             '--pitch', '0.0', 
             '--roll', '0.0',
@@ -203,13 +203,13 @@ def generate_launch_description():
             'gripper_tip_frame': 'gripper_tip',
             'tf_timeout': 1.0,
             'compensate_gripper_offset': True,
-            'safe_z': 200.0,
+            'safe_z': 0.200,  # Minimum Z height to avoid collisions (m)
             'move_speed': 30,
             'gripper_speed': 80,
-            'end_rx': -178.0,
+            'end_rx': -180.0, # End-effector orientation to keep gripper vertical to ground (degrees)
             'end_ry': 0.0,
-            'end_rz': -60.0,
-            'home_angles': [0.0, 0.0, 0.0, 0.0, 0.0, -45], # degree
+            'end_rz': -135.0,
+            'home_angles': [0.0, 0.0, 0.0, 0.0, 0.0, 45.0], # degree
         }]
     )
 
