@@ -1,0 +1,43 @@
+######################################################################################################################################################################################
+CUSTOMISED VISION PKG INSTALLATION FOR ANY COMPUTER FOR DUMMIES
+######################################################################################################################################################################################
+
+
+######################################################################################################################################################################################
+SCRIPT CHANGES - Found at src/vision_pkg/vision_pkg/rover_vision_node.py
+
+Change line 14 OV_MODEL_DIR = .... to the exact path of the best_openvino_model folder from the home directory. Not relative, absolute path
+Example - OV_MODEL_DIR = "/home/student21/Desktop/AERO62520_ws/personal_branch/Group12_team_space/System_integration/Ver01_ws/src/vision_pkg/vision_pkg/best_openvino_model"
+######################################################################################################################################################################################
+
+######################################################################################################################################################################################ROS DEPLOYMENT INSTRUCTIONS
+
+cd to the package root directory (outside src)
+colcon build
+mkdir -p install/vision_pkg/lib/python3.12/site-packages/
+
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+NEXT STEP IS VERY VERY IMPORTANT SO DO NOT JUST COPY AND PASTE, FIRST UNDERSTAND YOUR ENVIRONMENT STRUCTURE AND ROOT USER NAME AND MODIFY ACCORDINGLY
+This lets the global ros2 see your internal virtual python environment. Any naming error will result in the bridge not working and your pkg will not run
+
+ln -sf /home/ROOT_USR/ENVIRONMENT_NAME/lib/python3.12/site-packages/* install/vision_pkg/lib/python3.12/site-packages/
+
+Example 1: Root User = student21       venv name = robots_ros
+ln -sf /home/student21/robots_ros/lib/python3.12/site-packages/* install/vision_pkg/lib/python3.12/site-packages/
+
+Example 2: Root User = student04       venv name = robots
+ln -sf /home/student21/robots/lib/python3.12/site-packages/* install/vision_pkg/lib/python3.12/site-packages/
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+source install/setup.bash
+export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+
+ros2 run vision_pkg rover_vision 
+
+
+
+
+
+
+
+
