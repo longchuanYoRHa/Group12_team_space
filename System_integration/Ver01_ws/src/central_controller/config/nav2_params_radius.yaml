@@ -95,9 +95,9 @@ controller_server:
     general_goal_checker:
       stateful: True
       plugin: "nav2_controller::SimpleGoalChecker"
-      xy_goal_tolerance: 0.19
+      xy_goal_tolerance: 0.24
       # 略放宽终点朝向，减轻路径末端与目标朝向不一致时的扭头振荡
-      yaw_goal_tolerance: 0.20
+      yaw_goal_tolerance: 0.30
     FollowPath:
       plugin: "nav2_mppi_controller::MPPIController"
       time_steps: 56
@@ -145,13 +145,13 @@ controller_server:
         enabled: true
         cost_power: 1
         cost_weight: 5.0
-        threshold_to_consider: 1.4
+        threshold_to_consider: 0.6
       GoalAngleCritic:
         enabled: true
         cost_power: 1
         # 降低权重、推迟介入距离，避免与 PathFollow/PathAlign 在终点打架导致原地转圈
-        cost_weight: 3.0
-        threshold_to_consider: 0.24
+        cost_weight: 6.0
+        threshold_to_consider: 0.3
       PreferForwardCritic:
         enabled: true
         cost_power: 1
@@ -174,21 +174,21 @@ controller_server:
         cost_weight: 14.0
         max_path_occupancy_ratio: 0.05
         trajectory_point_step: 4
-        threshold_to_consider: 0.55
+        threshold_to_consider: 0.25
         offset_from_furthest: 20
         use_path_orientations: false
       PathFollowCritic:
         enabled: true
         cost_power: 1
-        cost_weight: 7.0
+        cost_weight: 10.0
         offset_from_furthest: 5
-        threshold_to_consider: 0.24
+        threshold_to_consider: 0.25
       PathAngleCritic:
         enabled: true
         cost_power: 1
-        cost_weight: 6.0
+        cost_weight: 9.0
         offset_from_furthest: 4
-        threshold_to_consider: 0.5
+        threshold_to_consider: 0.25
         max_angle_to_furthest: 1.0
         mode: 0
       # TwirlingCritic:
@@ -213,9 +213,9 @@ local_costmap:
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         # 越小：同一 inflation_radius 内代价衰减越慢 → RViz 里渐变层更“宽”、过渡更柔和
-        cost_scaling_factor: 5.0
+        cost_scaling_factor: 8.0
         # 须 ≥ robot_radius
-        inflation_radius: 0.36
+        inflation_radius: 0.30
       voxel_layer:
         plugin: "nav2_costmap_2d::VoxelLayer"
         enabled: True
