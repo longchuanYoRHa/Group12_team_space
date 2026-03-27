@@ -69,10 +69,10 @@ controller_server:
   ros__parameters:
     controller_frequency: 20.0
     costmap_update_timeout: 0.30
-    min_x_velocity_threshold: 0.001
+    min_x_velocity_threshold: 0.05
     # 差速车无侧向速度，应接近 0；误填 0.5 会影响“静止/运动”判定与部分恢复逻辑
     min_y_velocity_threshold: 0.01
-    min_theta_velocity_threshold: 0.001
+    min_theta_velocity_threshold: 0.15
     # 终点附近若短暂横向摆动，过小会误判跟随失败 → 反复重规划
     failure_tolerance: 1.0
     progress_checker_plugins: ["progress_checker"]
@@ -95,9 +95,9 @@ controller_server:
     general_goal_checker:
       stateful: True
       plugin: "nav2_controller::SimpleGoalChecker"
-      xy_goal_tolerance: 0.19
+      xy_goal_tolerance: 0.24
       # 略放宽终点朝向，减轻路径末端与目标朝向不一致时的扭头振荡
-      yaw_goal_tolerance: 0.20
+      yaw_goal_tolerance: 0.30
     FollowPath:
       plugin: "nav2_mppi_controller::MPPIController"
       time_steps: 56
@@ -145,13 +145,13 @@ controller_server:
         enabled: true
         cost_power: 1
         cost_weight: 5.0
-        threshold_to_consider: 1.4
+        threshold_to_consider: 0.6
       GoalAngleCritic:
         enabled: true
         cost_power: 1
         # 降低权重、推迟介入距离，避免与 PathFollow/PathAlign 在终点打架导致原地转圈
-        cost_weight: 3.0
-        threshold_to_consider: 0.24
+        cost_weight: 6.0
+        threshold_to_consider: 0.3
       PreferForwardCritic:
         enabled: true
         cost_power: 1
@@ -174,21 +174,21 @@ controller_server:
         cost_weight: 14.0
         max_path_occupancy_ratio: 0.05
         trajectory_point_step: 4
-        threshold_to_consider: 0.55
+        threshold_to_consider: 0.25
         offset_from_furthest: 20
         use_path_orientations: false
       PathFollowCritic:
         enabled: true
         cost_power: 1
-        cost_weight: 7.0
+        cost_weight: 10.0
         offset_from_furthest: 5
-        threshold_to_consider: 0.24
+        threshold_to_consider: 0.25
       PathAngleCritic:
         enabled: true
         cost_power: 1
-        cost_weight: 6.0
+        cost_weight: 9.0
         offset_from_furthest: 4
-        threshold_to_consider: 0.5
+        threshold_to_consider: 0.25
         max_angle_to_furthest: 1.0
         mode: 0
       # TwirlingCritic:
@@ -208,14 +208,14 @@ local_costmap:
       height: 3
       resolution: 0.05
       # 圆形机器人模型（与 global 一致）；须 ≥ 实车/仿真外廓半径
-      robot_radius: 0.35
+      robot_radius: 0.15
       plugins: ["voxel_layer", "inflation_layer"]
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         # 越小：同一 inflation_radius 内代价衰减越慢 → RViz 里渐变层更“宽”、过渡更柔和
-        cost_scaling_factor: 9.0
+        cost_scaling_factor: 8.0
         # 须 ≥ robot_radius
-        inflation_radius: 0.36
+        inflation_radius: 0.30
       voxel_layer:
         plugin: "nav2_costmap_2d::VoxelLayer"
         enabled: True
@@ -248,7 +248,7 @@ global_costmap:
       publish_frequency: 1.0
       global_frame: map
       robot_base_frame: base_link
-      robot_radius: 0.35
+      robot_radius: 0.20
       resolution: 0.05
       track_unknown_space: true
       plugins: ["static_layer", "obstacle_layer", "inflation_layer"]
@@ -272,7 +272,7 @@ global_costmap:
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         # 越小渐变越“铺得开”；与 local 可分开调
-        cost_scaling_factor: 8.0
+        cost_scaling_factor: 2.5
         # 浅蓝膨胀过渡带总宽度约 = 车半径 35 cm（全局路径在更远处开始感到代价）
         inflation_radius: 0.70
       always_send_full_costmap: True
@@ -468,31 +468,33 @@ docking_server:
     dock_prestaging_tolerance: 0.5
 
     # Types of docks
-    dock_plugins: ['simple_charging_dock']
-    simple_charging_dock:
-      plugin: 'opennav_docking::SimpleChargingDock'
-      docking_threshold: 0.05
-      staging_x_offset: -0.7
+    # 模块测试使用非充电 dock：由上层 action 直接传入视觉计算后的 dock_pose
+    dock_plugins: ['simple_non_charging_dock']
+    simple_non_charging_dock:
+      plugin: 'opennav_docking::SimpleNonChargingDock'
+      docking_threshold: 0.03
+      staging_x_offset: -0.2
       # 使用 DockRobot action 直接传入的 dock_pose（视觉计算后的 20cm 停靠点）
-      use_external_detection_pose: false
-      use_battery_status: false # true
+      use_external_detection_pose: true
       use_stall_detection: false # true
 
       external_detection_timeout: 1.0
-      external_detection_translation_x: -0.18
+      # 如果我们直接发布的是“dock pose”而不是传感器检测到的特征位姿，
+      # 则这里偏移量应设为 0，避免二次修正导致误差。
+      external_detection_translation_x: 0.0
       external_detection_translation_y: 0.0
-      external_detection_rotation_roll: -1.57
-      external_detection_rotation_pitch: -1.57
+      external_detection_rotation_roll: 0.0
+      external_detection_rotation_pitch: 0.0
       external_detection_rotation_yaw: 0.0
       filter_coef: 0.1
 
     # Dock instances
-    # The following example illustrates configuring dock instances.
-    # docks: ['home_dock']  # Input your docks here
-    # home_dock:
-    #   type: 'simple_charging_dock'
-    #   frame: map
-    #   pose: [0.0, 0.0, 0.0]
+    # 即使 use_dock_id=False（动作里直接传 dock_pose），也保留 1 个 dummy 实例更稳妥。
+    docks: ['dummy_dock']
+    dummy_dock:
+      type: 'simple_non_charging_dock'
+      frame: odom
+      pose: [0.0, 0.0, 0.0]
 
     controller:
       k_phi: 3.0

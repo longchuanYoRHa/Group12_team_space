@@ -16,6 +16,8 @@ setup(
          glob('launch/*launch.[pxy][yma]*')),
          (os.path.join('share', package_name, 'config'),
          glob('config/*.yaml')),
+         (os.path.join('share', package_name, 'maps'),
+         glob('maps/*')),
          (os.path.join('share', package_name, 'config'),
          glob('rviz/*.rviz')),
     ],
@@ -36,6 +38,8 @@ setup(
             'mock_arm_node = central_controller.mock_arm_node:main',
             'task_manager_v2 = central_controller.task_manager_node_v2:main',
             'detect_objects_in_pgm_map = central_controller.detect_objects_in_pgm_map:main',
+            'module_test_docking = central_controller.module_test_docking:main',
+            'module_test_explore_approach = central_controller.module_test_explore_approach:main',
         ],
     },
 )

@@ -34,6 +34,7 @@ def generate_launch_description():
     # Launch arguments
     use_sim_time = LaunchConfiguration('use_sim_time', default='false')
     use_vision = LaunchConfiguration('use_vision', default='false')
+    camera_frame_id = LaunchConfiguration('camera_frame_id', default='camera_link')
     
     # Create condition variable
     lidar_connected_str = 'true' if lidar_connected else 'false'
@@ -149,7 +150,7 @@ def generate_launch_description():
     wait_for_slam_configured_cmd = ExecuteProcess(
         cmd=['bash', '-c',
              'timeout=10; elapsed=0; '
-             'until ros2 lifecycle get /slam_toolbox | grep -q "active\|inactive"; do '
+             'until ros2 lifecycle get /slam_toolbox | grep -q "active\\|inactive"; do '
              '  echo "Waiting for SLAM to be configured... ($elapsed/$timeout seconds)"; '
              '  sleep 0.5; elapsed=$((elapsed+1)); '
              '  if [ $elapsed -ge $timeout ]; then '
@@ -198,19 +199,17 @@ def generate_launch_description():
     )
 
 
-    # 7. Launch Task Manager State Machine Node
-    task_manager_node = Node(
+    # 7. Launch exploration + interest-point approach test node
+    module_test_explore_node = Node(
         package='central_controller',
-        # executable='task_manager',
-        executable='task_manager_v2',
-        name='task_manager',
+        executable='module_test_explore_approach',
+        name='module_test_explore_approach',
         output='screen',
         parameters=[{
-            # 'pregrasp_distance': 0.5,  # meters
-            # 'preplace_distance': 0.6,  # meters
-            # 'stow_pose_x': 0.3,
-            # 'stow_pose_y': 0.0,
-            # 'stow_pose_z': 0.2,
+            'maps_directory': PathJoinSubstitution([controller_pkg_dir, 'maps']),
+            'map_save_basename': 'module02_explore_complete',
+            'approach_distance_m': 0.4,
+            'use_sim_time': use_sim_time,
         }]
     )
     
@@ -312,18 +311,27 @@ def generate_launch_description():
             'echo "/reset_odometry call done"',
         ],
         output='screen',
+        condition=UnlessCondition(PythonExpression(["'", use_sim_time, "' == 'true'"]))
     )
 
     # 8. After /map topic available, reset odom once, then start Nav2
     nav2_after_map = TimerAction(
         period=0.1,  # short delay
-        actions=[nav2_launch]
+        actions=[nav2_launch],
+        condition=UnlessCondition(PythonExpression(["'", use_sim_time, "' == 'true'"]))
+    )
+
+    # In simulation, skip reset_odometry and start Nav2 directly after /map is ready.
+    nav2_after_map_sim = TimerAction(
+        period=0.1,
+        actions=[nav2_launch],
+        condition=IfCondition(PythonExpression(["'", use_sim_time, "' == 'true'"]))
     )
     
     wait_for_map_handler = RegisterEventHandler(
         OnProcessExit(
             target_action=wait_for_map_cmd,
-            on_exit=[reset_odometry_cmd]
+            on_exit=[reset_odometry_cmd, nav2_after_map_sim]
         )
     )
 
@@ -345,13 +353,13 @@ def generate_launch_description():
         remappings=explore_remappings,
     )
 
-    # 11. After navigate_to_pose available, delay start task manager and optionally vision
-    task_manager_after_nav_action = TimerAction(
+    # 11. After navigate_to_pose available, delay start explore test node
+    module_test_after_nav_action = TimerAction(
         period=3.0,  # give Nav2 time to be ready
-        actions=[task_manager_node, custom_explore_node]
+        actions=[module_test_explore_node, custom_explore_node]
     )
 
-    # 9. After Nav2 starts, wait for navigate_to_pose action available, then start task manager
+    # 9. After Nav2 starts, wait for navigate_to_pose action available, then start test node
     wait_nav_action_after_map = TimerAction(
         period=8.0,  # give Nav2 time to start (after /map available in 8 seconds)
         actions=[wait_for_nav_action_cmd]
@@ -367,7 +375,7 @@ def generate_launch_description():
     wait_for_nav_action_handler = RegisterEventHandler(
         OnProcessExit(
             target_action=wait_for_nav_action_cmd,
-            on_exit=[task_manager_after_nav_action]
+            on_exit=[module_test_after_nav_action]
         )
     )
 
@@ -388,6 +396,12 @@ def generate_launch_description():
             'use_vision',
             default_value='true',
             description='Set true to start rover_vision_node (RealSense + YOLO for pick/place targets)'
+        ),
+
+        DeclareLaunchArgument(
+            'camera_frame_id',
+            default_value='camera_link',
+            description='TF frame id for vision 3D points (e.g. camera_link or D435i_camera_link)'
         ),
         
         # Log detection results

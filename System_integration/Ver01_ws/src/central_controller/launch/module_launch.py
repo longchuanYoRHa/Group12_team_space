@@ -34,6 +34,7 @@ def generate_launch_description():
     # Launch arguments
     use_sim_time = LaunchConfiguration('use_sim_time', default='false')
     use_vision = LaunchConfiguration('use_vision', default='false')
+    camera_frame_id = LaunchConfiguration('camera_frame_id', default='camera_link')
     
     # Create condition variable
     lidar_connected_str = 'true' if lidar_connected else 'false'
@@ -202,15 +203,18 @@ def generate_launch_description():
     task_manager_node = Node(
         package='central_controller',
         # executable='task_manager',
-        executable='task_manager_v2',
-        name='task_manager',
+        executable='module_test_docking',
+        name='module_test_docking',
         output='screen',
         parameters=[{
-            # 'pregrasp_distance': 0.5,  # meters
-            # 'preplace_distance': 0.6,  # meters
-            # 'stow_pose_x': 0.3,
-            # 'stow_pose_y': 0.0,
-            # 'stow_pose_z': 0.2,
+            'camera_frame_id': camera_frame_id,
+            'dock_type': 'simple_non_charging_dock',
+            'use_external_detection_pose': True,
+            # 对齐 Nav2 Docking Server 默认外部检测话题名；
+            # 节点内部会同时兼容发布到 /docking_server/detected_dock_pose。
+            'external_detection_pose_topic': 'detected_dock_pose',
+            'external_detection_pose_frame': 'odom',
+            'use_sim_time': use_sim_time,
         }]
     )
     
@@ -312,18 +316,27 @@ def generate_launch_description():
             'echo "/reset_odometry call done"',
         ],
         output='screen',
+        condition=UnlessCondition(PythonExpression(["'", use_sim_time, "' == 'true'"]))
     )
 
     # 8. After /map topic available, reset odom once, then start Nav2
     nav2_after_map = TimerAction(
         period=0.1,  # short delay
-        actions=[nav2_launch]
+        actions=[nav2_launch],
+        condition=UnlessCondition(PythonExpression(["'", use_sim_time, "' == 'true'"]))
+    )
+
+    # In simulation, skip reset_odometry and start Nav2 directly after /map is ready.
+    nav2_after_map_sim = TimerAction(
+        period=0.1,
+        actions=[nav2_launch],
+        condition=IfCondition(PythonExpression(["'", use_sim_time, "' == 'true'"]))
     )
     
     wait_for_map_handler = RegisterEventHandler(
         OnProcessExit(
             target_action=wait_for_map_cmd,
-            on_exit=[reset_odometry_cmd]
+            on_exit=[reset_odometry_cmd, nav2_after_map_sim]
         )
     )
 
@@ -388,6 +401,12 @@ def generate_launch_description():
             'use_vision',
             default_value='true',
             description='Set true to start rover_vision_node (RealSense + YOLO for pick/place targets)'
+        ),
+
+        DeclareLaunchArgument(
+            'camera_frame_id',
+            default_value='camera_link',
+            description='TF frame id for vision 3D points (e.g. camera_link or D435i_camera_link)'
         ),
         
         # Log detection results
