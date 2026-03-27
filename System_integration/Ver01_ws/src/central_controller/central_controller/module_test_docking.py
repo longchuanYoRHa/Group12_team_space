@@ -526,9 +526,9 @@ class ModuleTestDockingNode(Node):
             return
 
         # Send pick command once immediately on state entry.
-        target_pt = self._point_camera_to_base_link_m(self._vision_trigger_point_camera)
+        target_pt = self._point_camera_passthrough_m(self._vision_trigger_point_camera)
         self.get_logger().info(
-            "GRASP: publishing /arm/target_pick in base_link (meters) "
+            "GRASP: publishing /arm/target_pick in camera frame (meters) "
             f"({target_pt.x:.3f}, {target_pt.y:.3f}, {target_pt.z:.3f})"
         )
         if not hasattr(self, "_arm_pick_pub"):
@@ -552,29 +552,15 @@ class ModuleTestDockingNode(Node):
             self._set_state(TestState.DONE)
             return
 
-    def _point_camera_to_base_link_m(self, point_msg: geometry_msgs.Point):
+    def _point_camera_passthrough_m(self, point_msg: geometry_msgs.Point):
         """
-        Convert camera-frame point to base_link frame (meters).
-        arm_interfaces.md specifies /arm/target_pick uses geometry_msgs/Point in base_link, in meters.
+        Forward camera-frame point directly to the arm command topic.
+        Units remain meters; no TF transform is applied here.
         """
-        frame_id = self.get_parameter("camera_frame_id").value
-
-        point_stamped = geometry_msgs.PointStamped()
-        point_stamped.header.frame_id = frame_id
-        point_stamped.header.stamp = self.get_clock().now().to_msg()
-        point_stamped.point = point_msg
-
-        transform = self.tf_buffer.lookup_transform(
-            "base_link",
-            frame_id,
-            rclpy.time.Time(),
-            timeout=rclpy.duration.Duration(seconds=0.5),
-        )
-        point_in_base = tf2_geometry_msgs.do_transform_point(point_stamped, transform)
         return geometry_msgs.Point(
-            x=point_in_base.point.x,
-            y=point_in_base.point.y,
-            z=point_in_base.point.z,
+            x=point_msg.x,
+            y=point_msg.y,
+            z=point_msg.z,
         )
 
 
