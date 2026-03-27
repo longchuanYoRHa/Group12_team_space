@@ -209,23 +209,15 @@ base_link
 ### Deploy to Pi
 ```bash
 # From NUC, copy the source to Pi
-scp -r ~/mycobot_ws/src/my_cobot_control elephant@10.0.1.3:~/ros2_ws/src/
 scp -r ~/Desktop/Group12_team_space/Manipulator/src/my_cobot_control elephant@10.0.1.3:~/ros2_ws/src/
+scp -r ~/mycobot_ws/src/my_cobot_control elephant@10.0.1.3:~/ros2_ws/src/
 
-# SSH into Pi
+# On NUC — SSH into Pi
 ssh elephant@10.0.1.3
 
-# syc time
+# sync time
 sudo date -s "$(ssh leo-rover-12@10.0.1.4 'date -u +%Y-%m-%d\ %H:%M:%S.%N')"
 sudo date -s "$(ssh student42@10.0.1.4 'date -u +%Y-%m-%d\ %H:%M:%S.%N')"
-# check NTP status for timesync
-sudo systemctl status ntp
-# check hardware clock
-timedatectl  
-
-# netplan
-sudo nano /etc/netplan/99-wired-static.yaml
-sudo netplan apply
 
 # Build on Pi
 cd ~/ros2_ws
@@ -243,11 +235,6 @@ ros2 launch my_cobot_control mycobot_with_tf2.launch.py
 
 # With custom parameters
 ros2 launch my_cobot_control mycobot_with_tf2.launch.py use_mock:=false safe_z:=250.0 move_speed:=40
-```
-
-### Or run the node directly (without launch file)
-```bash
-ros2 run my_cobot_control mycobot_controller --ros-args -r __ns:=/arm
 ```
 
 ## 3.3 Run on Dev Machine (Mock Mode / Development)
@@ -332,10 +319,13 @@ cd ~/ros2_ws/scripts
 python3 calibration_tool.py
 ```
 
-Calibration files are saved to `my_cobot_control/calibration_data/` and automatically loaded by the controller (latest file used). You can also specify a calibration file explicitly via launch parameter:
-
+## 3.6 Time Synchronization Check
 ```bash
-ros2 run my_cobot_control mycobot_controller --ros-args \
-  -r __ns:=/arm \
-  -p calibration_file:=/path/to/calibration_2026-02-25_18-26-52.json
+# sync time
+sudo date -s "$(ssh leo-rover-12@10.0.1.4 'date -u +%Y-%m-%d\ %H:%M:%S.%N')"
+sudo date -s "$(ssh student42@10.0.1.4 'date -u +%Y-%m-%d\ %H:%M:%S.%N')"
+# check NTP status for timesync
+sudo systemctl status ntp
+# check hardware clock
+timedatectl  
 ```

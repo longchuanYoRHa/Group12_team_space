@@ -57,9 +57,11 @@ def generate_launch_description():
     )
 
     base_x_arg = DeclareLaunchArgument(
+        # Calculated value: 0.08399
         'base_x', default_value='0.05500',
         description='Base-to-arm X offset for base_link->g_base (m)')
     base_y_arg = DeclareLaunchArgument(
+        # Calculated value: 0.06494
         'base_y', default_value='0.03594',
         description='Base-to-arm Y offset for base_link->g_base (m)')
     base_z_arg = DeclareLaunchArgument(
@@ -206,7 +208,9 @@ def generate_launch_description():
             'safe_z': 0.200,  # Minimum Z height to avoid collisions (m)
             'move_speed': 30,
             'gripper_speed': 80,
-            'end_rx': -180.0, # End-effector orientation to keep gripper vertical to ground (degrees)
+            
+            # End-effector orientation to keep gripper vertical to ground (degrees)
+            'end_rx': -180.0,
             'end_ry': 0.0,
             'end_rz': -135.0,
             'home_angles': [0.0, 0.0, 0.0, 0.0, 0.0, 45.0], # degree
