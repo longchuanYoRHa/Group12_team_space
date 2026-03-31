@@ -36,19 +36,25 @@ sudo ./sanity_check.sh
 
 ------------------------------
 ## 🎥 Manual Remote Camera Access
-To launch the vision node manually, use the following command. Replace <NUC_IP> with the one confirmed by the Sanity Check (e.g., 10.42.0.227).
+To launch the vision node manually, use the following command. Replace 10.42.0.227 if the Sanity Check reports a different IP.
 
 export libgl_always_software=1 && ssh -YC -o Ciphers=chacha20-poly1305@openssh.com -o Compression=yes leo-rover-12@10.42.0.227 "export ROS_DOMAIN_ID=12; export ROS_AUTOMATIC_DISCOVERY_RANGE=SUBNET; source ~/robots/bin/activate && cd ~/vision_pkg && source install/setup.bash && ros2 run vision_pkg rover_vision"
 
 ------------------------------
-## 🔍 Viewing Topics (Live Data)
-To view topics like /target_pick/green on your local laptop terminal, you must first align your environment to the robot's subnet bridge:
+## 🔍 Viewing Topics (Live Data via SSH)
+To view live topic data (e.g., coordinates for the green cube), you must SSH into the NUC and align the ROS environment:
+## 1. SSH into the NUC
 
-# Run on your Laptop
+ssh leo-rover-12@10.42.0.227
+
+## 2. Align Environment & View Data
+Inside the NUC terminal, run the following to see the topics:
+
+# Set discovery variables
 export ROS_DOMAIN_ID=12
 export ROS_AUTOMATIC_DISCOVERY_RANGE=SUBNET
-ros2 daemon stop && ros2 daemon start
-# View live coordinates
+# List and Echo topics
+ros2 topic list
 ros2 topic echo /target_pick/green
 
 ------------------------------
@@ -67,4 +73,3 @@ ros2 topic echo /target_pick/green
 ------------------------------
 END OF DOCUMENTATION
 ------------------------------
-
