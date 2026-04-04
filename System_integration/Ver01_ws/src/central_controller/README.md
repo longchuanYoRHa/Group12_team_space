@@ -1,5 +1,56 @@
 # Central Controller
 
+## Rover bring-up: time sync and topic check
+
+Accurate time on the base and NUC avoids TF extrapolation warnings and bad sensor fusion. After you SSH into the **rover**, open a session on the **NUC** from that shell and sync time there before running ROS 2.
+
+### 1. SSH chain
+
+From your laptop (example hostnames—use your team’s addresses):
+
+```bash
+ssh <user>@<rover-hostname-or-ip>
+```
+
+On the rover, SSH into the NUC:
+
+```bash
+ssh <user>@<nuc-hostname-or-ip>
+```
+
+### 2. Time sync on the NUC (command line)
+
+On the **NUC** shell, set the NUC clock from the rover time (SSH must reach `leo-rover-12@10.0.0.2`; you may be prompted for a password unless keys are set up):
+
+```bash
+sudo date -s "$(ssh leo-rover-12@10.0.0.2 date '+%Y-%m-%d %H:%M:%S')"
+```
+
+Check with `date` or `date -u`. Exit the NUC SSH session when done if you connected via the rover; otherwise continue on the NUC for ROS commands.
+
+### 3. Check ROS 2 topics on the NUC
+
+With the base firmware / driver stack running, on a terminal where the NUC ROS environment is sourced, list topics:
+
+```bash
+ros2 topic list
+```
+
+You should see at least:
+
+- `/imu/data`
+- `/imu/data_raw`
+- `/imu/rpy`
+- `/joint_states`
+- `/merged_odom`
+- `/robot_description`
+- `/tf`
+- `/wheel_odom`
+
+If any of these are missing, the chassis stack is probably not fully started or the wrong workspace/domain is sourced.
+
+---
+
 `central_controller/task_manager_node_v2.py` is the main scheduling node. It runs a **topic-driven state machine** that ties together exploration, navigation, precision alignment, manipulation phases, and post-exploration map fallback.
 
 The current implementation no longer uses the older intermediate states described in the previous README (`OBJECT_FOUND`, `BIN_FOUND`, `PAUSE_EXPLORE`). Transitions are driven in callbacks: pause exploration, send navigation goals, and advance the state machine directly.
