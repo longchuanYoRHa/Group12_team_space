@@ -255,7 +255,7 @@ source install/setup.bash
 # Control node without TF2 (use raw coordinates in arm frame)
 ros2 launch my_cobot_control arm_controller.launch.py
 
-# Default: real hardware + base_link->g_base
+# Default: real hardware + base_link->g_base + base_link->camera_link
 ros2 launch my_cobot_control mycobot_with_tf2.launch.py
 
 # Mock mode (no hardware, with GUI for joint angles)

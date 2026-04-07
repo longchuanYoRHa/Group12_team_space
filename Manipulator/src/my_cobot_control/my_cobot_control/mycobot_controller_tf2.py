@@ -132,11 +132,11 @@ class MyCobotControllerTF2(Node):
         'joint6output_to_joint6',
     ]
     
-    #  Limitation in meter
+    #  Limitation of point in meter
     COORD_LIMITS = {
-        'x': (0.015, 0.295),
-        'y': (-0.130, 0.070),
-        'z': (0.015, 0.430),
+        'x': (0.120, 0.290),
+        'y': (-0.160, 0.055),
+        'z': (0.080, 0.180),
     }
 
     def __init__(self):

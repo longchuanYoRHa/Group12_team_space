@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 from launch import LaunchDescription
-from launch.actions import IncludeLaunchDescription
+from launch.actions import IncludeLaunchDescription, ExecuteProcess
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
@@ -35,8 +35,23 @@ def generate_launch_description():
         output='screen',
         arguments=['-d', rviz_config] if os.path.exists(rviz_config) else []
     )
+
+    # The workspace limits marker is published as a static topic for visualization in RViz. 
+    # It defines a box representing the arm's reachable workspace.
+    workspace_marker_pub = ExecuteProcess(
+        cmd=[
+            'ros2', 'topic', 'pub', '-r', '1',
+            '/arm/workspace_limits', 'visualization_msgs/msg/Marker',
+            '{"header": {"frame_id": "g_base"}, "ns": "workspace", "id": 0, "type": 1, "action": 0, '
+            '"pose": {"position": {"x": 0.195, "y": -0.0525, "z": 0.035}, "orientation": {"w": 1.0}}, '
+            '"scale": {"x": 0.170, "y": 0.215, "z": 0.100}, '
+            '"color": {"r": 0.0, "g": 1.0, "b": 0.0, "a": 0.25}}'
+        ],
+        output='log'
+    )
     
     return LaunchDescription([
         mycobot_launch,
         rviz_node,
+        workspace_marker_pub
     ])
