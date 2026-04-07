@@ -3,6 +3,10 @@ source /opt/ros/jazzy/setup.bash
 source /home/student04/robots/bin/activate
 cd /home/student04/test/vision_pkg
 
+# On the NUC
+source /home/leo-rover-12/robots/bin/activate
+cd /home/leo-rover-12/vision_pkg
+
 # Build the package
 colcon build --packages-select vision_pkg
 

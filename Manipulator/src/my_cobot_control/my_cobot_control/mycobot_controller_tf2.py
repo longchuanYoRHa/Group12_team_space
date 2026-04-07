@@ -488,6 +488,8 @@ class MyCobotControllerTF2(Node):
             return
 
         x_base, y_base, z_base = result
+        
+        x_base += 0.02  # Add small X offset to prevent collision
 
         target = Point()
         target.x = x_base
@@ -520,7 +522,7 @@ class MyCobotControllerTF2(Node):
                 return False
         
         # Cylindrical radius check (prevent reaching corners impossible to reach)
-        # Based on empirical data, max radius from (0,0) is ~0.3m
+        # Based on empirical data, max radius from (0,0) is ~0.32m
         radius = math.sqrt(pt.x**2 + pt.y**2)
         max_radius = 0.32
         if radius > max_radius:

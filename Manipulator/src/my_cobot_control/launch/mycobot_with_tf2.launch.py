@@ -57,15 +57,16 @@ def generate_launch_description():
     )
 
     base_x_arg = DeclareLaunchArgument(
-        # Calculated value: 0.08399
-        'base_x', default_value='0.05500',
+        # Calculated value: 0.16426 m (164.26mm)
+        'base_x', default_value='0.16426',
         description='Base-to-arm X offset for base_link->g_base (m)')
     base_y_arg = DeclareLaunchArgument(
-        # Calculated value: 0.06494
-        'base_y', default_value='0.03594',
+        # Calculated value: 0.06517 m (65.17mm)
+        'base_y', default_value='0.06517',
         description='Base-to-arm Y offset for base_link->g_base (m)')
     base_z_arg = DeclareLaunchArgument(
-        'base_z', default_value='0.01097',
+        # Calculated value: 0.01547 m (15.47mm)
+        'base_z', default_value='0.01547', 
         description='Base-to-arm Z offset for base_link->g_base (m)')
     base_roll_arg = DeclareLaunchArgument(
         'base_roll', default_value='0.0',
@@ -78,13 +79,16 @@ def generate_launch_description():
         description='Base-to-arm yaw for base_link->g_base (rad)')
 
     base_to_camera_x_arg = DeclareLaunchArgument(
-        'base_to_camera_x', default_value='0.158',
+        # Calculated value: 0.14715 m (147.15mm)
+        'base_to_camera_x', default_value='0.14715',
         description='Base-to-camera X offset for base_link->camera_link (m)')
     base_to_camera_y_arg = DeclareLaunchArgument(
-        'base_to_camera_y', default_value='0.007',
+        # Calculated value: -0.0391 m (-39.1mm)   
+        'base_to_camera_y', default_value='-0.0391',
         description='Base-to-camera Y offset for base_link->camera_link (m)')
     base_to_camera_z_arg = DeclareLaunchArgument(
-        'base_to_camera_z', default_value='0.081',
+        # Calculated value: 0.09595 m (95.95mm)
+        'base_to_camera_z', default_value='0.09595',
         description='Base-to-camera Z offset for base_link->camera_link (m)')
     base_to_camera_roll_arg = DeclareLaunchArgument(
         'base_to_camera_roll', default_value='-1.9199', # 20 + 90 degrees in radians
@@ -213,7 +217,8 @@ def generate_launch_description():
             'end_rx': -180.0,
             'end_ry': 0.0,
             'end_rz': -135.0,
-            'home_angles': [0.0, 0.0, 0.0, 0.0, 0.0, 45.0], # degree
+            'home_angles': [0.0, 60.0, -90, 25, 0.0, 45.0], # degree
+
         }]
     )
 

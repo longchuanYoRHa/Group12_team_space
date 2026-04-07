@@ -24,7 +24,7 @@ mycobot280_pi       -- Gazebo Simulation Package (from mltejas88/Project_Mycobot
 ## System Requirements
 
 - **Operating System**: Ubuntu 22.04 / 24.04
-- **ROS 2**: Jazzy (or Humble)
+- **ROS 2**: Jazzy
 - **Python**: 3.12+
 - **Dependencies**:
   - `pymycobot` (hardware control & inverse kinematics from Elephant Robotics)
@@ -209,7 +209,7 @@ base_link
 ### Deploy to Pi
 ```bash
 # From NUC, copy the source to Pi
-scp -r ~/Desktop/Group12_team_space/Manipulator/src/my_cobot_control elephant@10.0.1.3:~/ros2_ws/src/
+scp -r ~/Group12_team_space/Manipulator/src/my_cobot_control elephant@10.0.1.3:~/ros2_ws/src/
 scp -r ~/mycobot_ws/src/my_cobot_control elephant@10.0.1.3:~/ros2_ws/src/
 
 # On NUC — SSH into Pi
@@ -217,7 +217,11 @@ ssh elephant@10.0.1.3
 
 # sync time
 sudo date -s "$(ssh leo-rover-12@10.0.1.4 'date -u +%Y-%m-%d\ %H:%M:%S.%N')"
-sudo date -s "$(ssh student42@10.0.1.4 'date -u +%Y-%m-%d\ %H:%M:%S.%N')"
+sudo date -s "$(ssh student42@10.0.1.5 'date -u +%Y-%m-%d\ %H:%M:%S.%N')"
+
+TS=$(ssh leo-rover-12@10.0.1.4 "date -u +%Y-%m-%d\ %H:%M:%S.%N") || { echo "SSH failed"; exit 1; }
+[ -n "$TS" ] || { echo "Empty time string"; exit 1; }
+sudo date -u -s "$TS"
 
 # Build on Pi
 cd ~/ros2_ws
@@ -243,7 +247,8 @@ When no hardware is connected (no `/dev/ttyAMA0`), the controller automatically 
 
 ```bash
 # On dev machine
-cd ~/mycobot_ws
+cd ~/mycobot_ws # Or
+cd ~/Group12_team_space/Manipulator
 colcon build --packages-select my_cobot_control
 source install/setup.bash
 
