@@ -108,7 +108,7 @@ def generate_launch_description():
         output='screen'
     )
 
-    nav2_params_file = PathJoinSubstitution([controller_pkg_dir, 'config', 'nav2_params_radius.yaml'])
+    nav2_params_file = PathJoinSubstitution([controller_pkg_dir, 'config', 'nav2_params.yaml'])
 
     nav2_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
