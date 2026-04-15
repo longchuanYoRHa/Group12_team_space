@@ -101,7 +101,7 @@
     <!-- 原 world3 中 slam_simple 的位姿；几何替换为 meshes/space01.STL -->
     <model name='space01'>
       <static>true</static>
-      <pose>0 0 0 1.5708 0  0</pose>
+      <pose>0 0 0 1.5708 0 3.14159</pose>
       <link name='link'>
         <pose>0 0 0 0 0 0</pose>
         <collision name='collision'>
