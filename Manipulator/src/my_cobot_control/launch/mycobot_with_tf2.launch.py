@@ -55,7 +55,8 @@ def generate_launch_description():
         default_value='false',  # Default to false for real hardware
         description='Mock mode: true=simulation/dev (no hardware), false=real hardware'
     )
-
+    
+    # base_link -> g_base (arm base) transform parameters (default values based on design)
     base_x_arg = DeclareLaunchArgument(
         # Calculated value: 0.16426 m (164.26mm)
         'base_x', default_value='0.16426',
@@ -77,18 +78,19 @@ def generate_launch_description():
     base_yaw_arg = DeclareLaunchArgument(
         'base_yaw', default_value='0.0',
         description='Base-to-arm yaw for base_link->g_base (rad)')
-
+    
+    # base_link -> camera_link transform parameters (default values based on design and measurements)
     base_to_camera_x_arg = DeclareLaunchArgument(
         # Calculated value: 0.14715 m (147.15mm)
-        'base_to_camera_x', default_value='0.14715',
+        'base_to_camera_x', default_value='0.17000',
         description='Base-to-camera X offset for base_link->camera_link (m)')
     base_to_camera_y_arg = DeclareLaunchArgument(
-        # Calculated value: -0.0391 m (-39.1mm)   
-        'base_to_camera_y', default_value='-0.0391',
+        # Calculated value: -0.0041 m (-4.1mm)   
+        'base_to_camera_y', default_value='-0.0041',
         description='Base-to-camera Y offset for base_link->camera_link (m)')
     base_to_camera_z_arg = DeclareLaunchArgument(
-        # Calculated value: 0.09595 m (95.95mm)
-        'base_to_camera_z', default_value='0.09595',
+        # Calculated value: 0.11795 m (117.95mm)
+        'base_to_camera_z', default_value='0.11795',
         description='Base-to-camera Z offset for base_link->camera_link (m)')
     base_to_camera_roll_arg = DeclareLaunchArgument(
         'base_to_camera_roll', default_value='-1.9199', # 20 + 90 degrees in radians
