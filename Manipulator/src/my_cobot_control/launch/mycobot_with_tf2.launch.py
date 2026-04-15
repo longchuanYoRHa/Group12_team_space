@@ -55,15 +55,19 @@ def generate_launch_description():
         default_value='false',  # Default to false for real hardware
         description='Mock mode: true=simulation/dev (no hardware), false=real hardware'
     )
-
+    
+    # base_link -> g_base (arm base) transform parameters (default values based on design)
     base_x_arg = DeclareLaunchArgument(
-        'base_x', default_value='0.05500',
+        # Calculated value: 0.16426 m (164.26mm)
+        'base_x', default_value='0.16426',
         description='Base-to-arm X offset for base_link->g_base (m)')
     base_y_arg = DeclareLaunchArgument(
-        'base_y', default_value='0.03594',
+        # Calculated value: 0.06517 m (65.17mm)
+        'base_y', default_value='0.06517',
         description='Base-to-arm Y offset for base_link->g_base (m)')
     base_z_arg = DeclareLaunchArgument(
-        'base_z', default_value='0.01097',
+        # Calculated value: 0.01547 m (15.47mm)
+        'base_z', default_value='0.01547', 
         description='Base-to-arm Z offset for base_link->g_base (m)')
     base_roll_arg = DeclareLaunchArgument(
         'base_roll', default_value='0.0',
@@ -74,15 +78,19 @@ def generate_launch_description():
     base_yaw_arg = DeclareLaunchArgument(
         'base_yaw', default_value='0.0',
         description='Base-to-arm yaw for base_link->g_base (rad)')
-
+    
+    # base_link -> camera_link transform parameters (default values based on design and measurements)
     base_to_camera_x_arg = DeclareLaunchArgument(
-        'base_to_camera_x', default_value='0.158',
+        # Calculated value: 0.14715 m (147.15mm)
+        'base_to_camera_x', default_value='0.17000',
         description='Base-to-camera X offset for base_link->camera_link (m)')
     base_to_camera_y_arg = DeclareLaunchArgument(
-        'base_to_camera_y', default_value='0.007',
+        # Calculated value: -0.0041 m (-4.1mm)   
+        'base_to_camera_y', default_value='-0.0041',
         description='Base-to-camera Y offset for base_link->camera_link (m)')
     base_to_camera_z_arg = DeclareLaunchArgument(
-        'base_to_camera_z', default_value='0.081',
+        # Calculated value: 0.11795 m (117.95mm)
+        'base_to_camera_z', default_value='0.11795',
         description='Base-to-camera Z offset for base_link->camera_link (m)')
     base_to_camera_roll_arg = DeclareLaunchArgument(
         'base_to_camera_roll', default_value='-1.9199', # 20 + 90 degrees in radians
@@ -206,10 +214,13 @@ def generate_launch_description():
             'safe_z': 0.200,  # Minimum Z height to avoid collisions (m)
             'move_speed': 30,
             'gripper_speed': 80,
-            'end_rx': -180.0, # End-effector orientation to keep gripper vertical to ground (degrees)
+            
+            # End-effector orientation to keep gripper vertical to ground (degrees)
+            'end_rx': -180.0,
             'end_ry': 0.0,
             'end_rz': -135.0,
-            'home_angles': [0.0, 0.0, 0.0, 0.0, 0.0, 45.0], # degree
+            'home_angles': [0.0, 60.0, -90, 25, 0.0, 45.0], # degree
+
         }]
     )
 

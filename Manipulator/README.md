@@ -24,7 +24,7 @@ mycobot280_pi       -- Gazebo Simulation Package (from mltejas88/Project_Mycobot
 ## System Requirements
 
 - **Operating System**: Ubuntu 22.04 / 24.04
-- **ROS 2**: Jazzy (or Humble)
+- **ROS 2**: Jazzy
 - **Python**: 3.12+
 - **Dependencies**:
   - `pymycobot` (hardware control & inverse kinematics from Elephant Robotics)
@@ -209,23 +209,22 @@ base_link
 ### Deploy to Pi
 ```bash
 # From NUC, copy the source to Pi
+scp -r ~/Group12_team_space/Manipulator/src/my_cobot_control elephant@10.0.1.3:~/ros2_ws/src/
 scp -r ~/mycobot_ws/src/my_cobot_control elephant@10.0.1.3:~/ros2_ws/src/
-scp -r ~/Desktop/Group12_team_space/Manipulator/src/my_cobot_control elephant@10.0.1.3:~/ros2_ws/src/
 
-# SSH into Pi
+# On NUC — SSH into Pi
 ssh elephant@10.0.1.3
 
-# syc time
-sudo date -s "$(ssh leo-rover-12@10.0.1.4 'date -u +%Y-%m-%d\ %H:%M:%S.%N')"
-sudo date -s "$(ssh student42@10.0.1.4 'date -u +%Y-%m-%d\ %H:%M:%S.%N')"
-# check NTP status for timesync
-sudo systemctl status ntp
-# check hardware clock
-timedatectl  
+# sync time
+# sudo date -s "$(ssh leo-rover-12@10.0.1.4 'date -u +%Y-%m-%d\ %H:%M:%S.%N')"
+# sudo date -s "$(ssh student42@10.0.1.5 'date -u +%Y-%m-%d\ %H:%M:%S.%N')"
 
-# netplan
-sudo nano /etc/netplan/99-wired-static.yaml
-sudo netplan apply
+# TS=$(ssh leo-rover-12@10.0.1.4 "date -u +%Y-%m-%d\ %H:%M:%S.%N") || { echo "SSH failed"; exit 1; }
+# [ -n "$TS" ] || { echo "Empty time string"; exit 1; }
+# sudo date -u -s "$TS"
+
+# Check Sync Time
+chronyc sources -v
 
 # Build on Pi
 cd ~/ros2_ws
@@ -245,25 +244,21 @@ ros2 launch my_cobot_control mycobot_with_tf2.launch.py
 ros2 launch my_cobot_control mycobot_with_tf2.launch.py use_mock:=false safe_z:=250.0 move_speed:=40
 ```
 
-### Or run the node directly (without launch file)
-```bash
-ros2 run my_cobot_control mycobot_controller --ros-args -r __ns:=/arm
-```
-
 ## 3.3 Run on Dev Machine (Mock Mode / Development)
 
 When no hardware is connected (no `/dev/ttyAMA0`), the controller automatically enters **MOCK mode** — all hardware calls are simulated with print outputs.
 
 ```bash
 # On dev machine
-cd ~/mycobot_ws
+cd ~/mycobot_ws # Or
+cd ~/Group12_team_space/Manipulator
 colcon build --packages-select my_cobot_control
 source install/setup.bash
 
 # Control node without TF2 (use raw coordinates in arm frame)
 ros2 launch my_cobot_control arm_controller.launch.py
 
-# Default: real hardware + base_link->g_base
+# Default: real hardware + base_link->g_base + base_link->camera_link
 ros2 launch my_cobot_control mycobot_with_tf2.launch.py
 
 # Mock mode (no hardware, with GUI for joint angles)
@@ -318,7 +313,7 @@ ros2 launch my_cobot_control mycobot_with_rviz.launch.py
 ros2 topic pub --once /arm/target_pick geometry_msgs/msg/Point "{x: -0.006982066202908754, y: -0.009772047400474548, z: 0.18200001120567322}"
 
 # Send place command in camera frame in meter
-ros2 topic pub --once /arm/target_place geometry_msgs/msg/Point "{x: -0.042749661952257156, y: 0.00038108081207610667, z: 0.15700000524520874}"
+ros2 topic pub --once /arm/target_place geometry_msgs/msg/Point "{x: -0.03592269495129585, y: 0.029966816306114197, z: 0.1600000113248825}"
 ```
 
 
@@ -332,10 +327,13 @@ cd ~/ros2_ws/scripts
 python3 calibration_tool.py
 ```
 
-Calibration files are saved to `my_cobot_control/calibration_data/` and automatically loaded by the controller (latest file used). You can also specify a calibration file explicitly via launch parameter:
-
+## 3.6 Time Synchronization Check
 ```bash
-ros2 run my_cobot_control mycobot_controller --ros-args \
-  -r __ns:=/arm \
-  -p calibration_file:=/path/to/calibration_2026-02-25_18-26-52.json
+# sync time
+sudo date -s "$(ssh leo-rover-12@10.0.1.4 'date -u +%Y-%m-%d\ %H:%M:%S.%N')"
+sudo date -s "$(ssh student42@10.0.1.4 'date -u +%Y-%m-%d\ %H:%M:%S.%N')"
+# check NTP status for timesync
+sudo systemctl status ntp
+# check hardware clock
+timedatectl  
 ```

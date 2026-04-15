@@ -132,11 +132,11 @@ class MyCobotControllerTF2(Node):
         'joint6output_to_joint6',
     ]
     
-    #  Limitation in meter
+    #  Limitation of point in meter
     COORD_LIMITS = {
-        'x': (0.015, 0.295),
-        'y': (-0.130, 0.070),
-        'z': (0.015, 0.430),
+        'x': (0.120, 0.285),
+        'y': (-0.160, 0.058),
+        'z': (0.080, 0.180),
     }
 
     def __init__(self):
@@ -489,6 +489,34 @@ class MyCobotControllerTF2(Node):
 
         x_base, y_base, z_base = result
 
+        x_base += 0.02  # Add small 2cm offset to prevent collision
+        
+        # Polar Clamping
+        x_min, x_max = self.COORD_LIMITS['x']
+        y_min, y_max = self.COORD_LIMITS['y']
+
+        current_radius = math.sqrt(x_base**2 + y_base**2)
+
+        if current_radius > x_max:
+            scale = x_max / current_radius
+            original_x, original_y = x_base, y_base
+            x_base = x_base * scale
+            y_base = y_base * scale
+            self.get_logger().warn(
+                f'  [CLAMP] Reach > {x_max}m! Scaled ({original_x:.4f}, {original_y:.4f}) -> ({x_base:.4f}, {y_base:.4f})')
+        elif current_radius < x_min:
+            scale = x_min / current_radius
+            x_base = x_base * scale
+            y_base = y_base * scale
+            self.get_logger().warn(f'  [CLAMP] Too close! Forced radius to {x_min}m')
+
+        if y_base > y_max:
+            self.get_logger().warn(f'  [CLAMP] Y={y_base:.4f} > {y_max}, forcing to {y_max}')
+            y_base = y_max
+        elif y_base < y_min:
+            self.get_logger().warn(f'  [CLAMP] Y={y_base:.4f} < {y_min}, forcing to {y_min}')
+            y_base = y_min
+        
         target = Point()
         target.x = x_base
         target.y = y_base
@@ -520,7 +548,7 @@ class MyCobotControllerTF2(Node):
                 return False
         
         # Cylindrical radius check (prevent reaching corners impossible to reach)
-        # Based on empirical data, max radius from (0,0) is ~0.3m
+        # Based on empirical data, max radius from (0,0) is ~0.32m
         radius = math.sqrt(pt.x**2 + pt.y**2)
         max_radius = 0.32
         if radius > max_radius:
