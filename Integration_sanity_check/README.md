@@ -1,66 +1,66 @@
-
+Since the script is now portable and works on any laptop by checking subnets and auto-installing tools, the documentation needs to reflect these new "Safety Checks".
+Here is the updated, comprehensive README.md.
 ------------------------------
-## 🛡️ Sanity Check Script: NUC & Manipulator Integration## This automated bash script verifies connectivity, synchronizes system clocks to the nanosecond, and launches ROS 2 nodes across a distributed system (Laptop, Intel NUC, and Cobot Manipulator).## 🚀 What the Script Does
+## 🛡️ Universal Sanity Check: NUC & Manipulator Integration## This automated tool verifies connectivity, synchronizes system clocks to the nanosecond, and launches ROS 2 nodes across a distributed system (Any Linux Laptop, Intel NUC, and Cobot Manipulator).## 🚀 What the Script Does
 
-   1. Pre-Check Cache Flush: Clears the laptop's ARP table to ensure a fresh, error-free connection.
-   2. Network Discovery: Dynamically finds the NUC's IP via its MAC address.
-   3. 3-Way Nano-Sync: Precise time synchronization (Laptop -> NUC -> Manipulator) to prevent ROS 2 TF transform "future" errors.
-   4. NTP Verification: Displays a beautified Chrony table to confirm the Manipulator is locked to the NUC.
-   5. Hardware & ROS 2 Launch: Fixes USB permissions and triggers the Manipulator drivers.
-   6. Vision Node Test: Captures 30s of RealSense data and OpenVINO inference to verify object detection.
+   1. Auto-Portability Check: Detects the local username and prompts for the local password securely.
+   2. Dependency Manager: Automatically installs sshpass and arp-scan if they are missing.
+   3. Subnet Safety Gate: Checks if the laptop is actually on the 10.42.0.x network before starting.
+   4. Network Discovery: Dynamically identifies the NUC's IP and the laptop's active network interface.
+   5. 3-Way Nano-Sync: Aligns Laptop -> NUC -> Manipulator clocks to prevent ROS 2 TF errors.
+   6. Vision & Hardware Audit: Fixes USB permissions and verifies RealSense detection for 30s.
 
 ------------------------------
 ## 💻 How to Use## 1. Run the Sanity Check
-The script handles the sudo scan internally. Ensure you are on the correct network subnet (e.g., 10.42.0.x).
+The script is now safe for any teammate. It will prompt for your local laptop password to perform network scans and time syncs.
 
 chmod +x sanity_check.sh
 ./sanity_check.sh
 
 ## 2. Manual Debugging: Network Flush
-If the NUC is physically connected but "Not Found," manually clear your laptop's network cache:
+If the NUC is physically connected but "Not Found," clear your laptop's network cache manually:
 
 sudo ip neigh flush all
 
 ------------------------------
 ## 🔍 Viewing Topics (Live Data via SSH)
-To view live coordinates (e.g., for a detected green cube) after the script finishes:
-1. SSH into the NUC:
+To view live coordinates after the script finishes, SSH into the NUC (use the IP found in Phase 1):
 
+# Example if NUC is at .227
 ssh leo-rover-12@10.42.0.227
-
-2. Set Environment & Echo Topic:
-
+# Inside the NUC:
 export ROS_DOMAIN_ID=12
 export ROS_AUTOMATIC_DISCOVERY_RANGE=SUBNET
 ros2 topic echo /target_pick/green
 
 ------------------------------
 ## 📊 Understanding the Output## 1. Chrony NTP Table Breakdown
-In Phase 2, the script confirms if the Manipulator is "listening" to the NUC's clock.
+In Phase 2, look for the System Peer Lock:
 
-* STATE (^*): The * indicates the "Current Best" peer. This confirms a perfect sync.
-* MASTER IP: The NUC’s bridge IP (10.0.1.4) serving as the time master.
-* REACH: 377 is a perfect score (successful communication on all recent attempts).
-* OFFSET: The time difference. Microsecond values (e.g., -25us) are ideal for ROS 2.
+* STATE (^*): The * indicates a perfect sync.
+* REACH (377): Indicates a 100% stable connection history.
+* OFFSET: Precision timing (e.g., -25us). Lower is better for ROS 2.
 
 ## 2. Vision Detections & Node Status
 
-* [VISION NOTE]: If "Recent Detections" says [FAILURE], it simply means no colored block was physically placed in front of the camera during the test.
-* CRITICAL: As long as the topics (e.g., /target_pick/green) are listed as [MATCHED], the Vision Node is working perfectly regardless of whether a block is currently being detected.
+* [VISION NOTE]: If "Recent Detections" says [FAILURE], the node is still working perfectly as long as the topics are [MATCHED]. It simply means no block was in the camera's view during the test.
 
 ## 3. Time Summary
 
-* [NOTE]: You will see slight millisecond differences in the final summary. This is purely due to SSH network latency. The internal system clocks are locked and synced.
+* [NOTE]: Millisecond differences in the final summary are due to SSH latency, not system clock desync.
 
 ------------------------------
-## ⚠️ Troubleshooting
+## ⚠️ Troubleshooting (Universal Fixes)
 
-* Phase 1 Failure (NUC not found): Ensure your laptop IP is manually set in the 10.42.0.x range and that the Ethernet cable is secure.
-* Phase 2 Failure (NTP Lock missing): If Chrony shows ? instead of ^*, the Manipulator cannot see the NUC's NTP server. Check the 10.0.1.4 bridge.
-* Topic Missing (/arm/): Ensure the Cobot base is powered on (Green light) and the USB cable is plugged into the NUC.
-* Vision Fail: Ensure the camera is in a Blue (USB 3.0) port. If it hangs, physically replug the camera to reset the USB bus.
+* [CRITICAL FAILURE] Subnet Mismatch: Your laptop is on the wrong network.
+* Fix: Go to Settings -> Network -> IPv4. Change to Manual.
+   * Set IP: 10.42.0.50 | Netmask: 255.255.255.0 | Gateway: Leave blank.
+* Phase 1 Failure (NUC not found): Ensure the Ethernet/WiFi link to the Rover is active and the NUC is powered on.
+* Missing /arm/ Topics: Ensure the Cobot base has a Green Light and the USB cable is plugged into a USB 3.0 (Blue) port on the NUC.
+* Dependency Errors: Ensure your laptop has an internet connection for the first run so it can download sshpass.
 
 ------------------------------
 ## END OF DOCUMENTATION
+Does the "Subnet Mismatch" warning help your teammates get their network settings right on the first try?
 
 
