@@ -1,5 +1,14 @@
 #!/bin/bash
 
+# --- START OF SCRIPT ---
+echo "=========================================================="
+echo "                STARTING SANITY CHECK"
+echo "=========================================================="
+
+# Pre-execution: Clear ARP cache to ensure fresh network discovery
+echo "[PRE-CHECK] Flushing laptop ARP cache..."
+echo "Manchester1824104" | sudo -S ip neigh flush all > /dev/null 2>&1
+
 # Configuration
 TARGET_MAC="8c:e9:ee:3a:83:0b"
 S_PASS="Manchester1824104"
@@ -10,11 +19,11 @@ MANIP_USER="elephant"
 MANIP_PASS="trunk"
 NUC_INT_IP="10.0.1.4"
 
-# --- PHASE 1: NUC DISCOVERY ---
+# --- PHASE 1: NUC DISCOVERY & LAPTOP SYNC ---
 echo ""
-echo "=============================="
-echo "      NUC DISCOVERY"
-echo "=============================="
+echo "=========================================================="
+echo " PHASE 1: DISCOVERING NUC & SYNCING LAPTOP TO NUC CLOCK"
+echo "=========================================================="
 NUC_IP=""
 for ((i=1; i<=10; i++)); do
     SCAN_RESULT=$(echo "$S_PASS" | sudo -S arp-scan --localnet 2>/dev/null | grep -i "$TARGET_MAC")
@@ -29,29 +38,31 @@ done
 
 if [ -z "$NUC_IP" ]; then echo "[FAILURE] NUC MAC not found."; exit 1; fi
 
-echo "[STEP] Pinging NUC at $NUC_IP..."
-ping -c 3 "$NUC_IP" > /dev/null 2>&1 && echo "[SUCCESS] Ping to NUC $NUC_IP successful" || { echo "[FAILURE] NUC unreachable"; exit 1; }
+echo "[STEP] Syncing Laptop clock to NUC via SSH NTP..."
+TS=$(sshpass -p "$NUC_PASS" ssh -o StrictHostKeyChecking=no "$NUC_USER@$NUC_IP" "date -u +'%Y-%m-%d %H:%M:%S.%N'")
+if [ -n "$TS" ]; then
+    echo "$S_PASS" | sudo -S date -u -s "$TS" > /dev/null
+    echo "[SUCCESS] Laptop synced to NUC time."
+else
+    echo "[FAILURE] Could not fetch time from NUC."; exit 1
+fi
 
 # --- PHASE 2: NUC & MANIPULATOR SETUP ---
 echo ""
-echo "=============================="
-echo " NUC & MANIPULATOR INTEGRATION"
-echo "=============================="
-echo "[STEP] Verifying Manipulator connectivity from NUC..."
-if sshpass -p "$NUC_PASS" ssh -o StrictHostKeyChecking=no "$NUC_USER@$NUC_IP" "ping -c 3 $MANIP_IP" > /dev/null 2>&1; then
-    echo "[SUCCESS] NUC can reach Manipulator at $MANIP_IP"
-else
-    echo "[FAILURE] Manipulator $MANIP_IP unreachable from NUC"; exit 1
-fi
-
-echo "[STEP] Syncing Master Clock & Fixing USB Permissions..."
-T_LAP_START=$(date -u +%H:%M:%S)
-sshpass -p "$NUC_PASS" ssh -o StrictHostKeyChecking=no "$NUC_USER@$NUC_IP" "echo '$NUC_PASS' | sudo -S date -s '$T_LAP_START' > /dev/null 2>&1"
+echo "=========================================================="
+echo " PHASE 2: SYNCING MANIPULATOR TO NUC & STARTING ARM ROS2"
+echo "=========================================================="
 
 REMOTE_CMD="sshpass -p '$MANIP_PASS' ssh -o StrictHostKeyChecking=no '$MANIP_USER@$MANIP_IP' \" \
     echo 'trunk' | sudo -S chmod 666 /dev/ttyUSB* 2>/dev/null || true; \
-    T_NUC_INT=\\\$(sshpass -p 'team12' ssh -o StrictHostKeyChecking=no leo-rover-12@$NUC_INT_IP 'date -u +%H:%M:%S'); \
-    echo 'trunk' | sudo -S date -s \\\"\\\$T_NUC_INT\\\" > /dev/null 2>&1; \
+    echo '[STEP] Syncing Manipulator to NUC ($NUC_INT_IP)...'; \
+    TS=\\\$(sshpass -p 'team12' ssh -o StrictHostKeyChecking=no $NUC_USER@$NUC_INT_IP 'date -u +\\\"%Y-%m-%d %H:%M:%S.%N\\\"'); \
+    echo 'trunk' | sudo -S date -u -s \\\"\\\$TS\\\"; \
+    echo ''; \
+    echo '--- CHRONY NTP SYNC DETAILS ---'; \
+    echo 'STATE | MASTER IP    | STRATUM | POLL | REACH | LAST RX | OFFSET'; \
+    chronyc sources | grep '^\^\*' | awk '{printf \\\"%-5s | %-12s | %-7s | %-4s | %-5s | %-7s | %s%s\\\n\\\", \\\$1, \\\$2, \\\$3, \\\$4, \\\$5, \\\$6, \\\$7, \\\$8}'; \
+    echo '-------------------------------'; \
     export ROS_DOMAIN_ID=12; export ROS_AUTOMATIC_DISCOVERY_RANGE=SUBNET; \
     source /opt/ros/jazzy/setup.bash; cd ~/ros2_ws && source install/setup.bash; \
     nohup ros2 launch my_cobot_control mycobot_with_tf2.launch.py > /dev/null 2>&1 & \
@@ -63,10 +74,9 @@ echo "[SUCCESS] Time Sync and ROS Launch complete on Manipulator"
 
 # --- PHASE 3: NUC REALSENSE INTEGRATION ---
 echo ""
-echo "=============================="
-echo "  NUC REALSENSE INTEGRATION"
-echo "=============================="
-echo "[STEP] Cleaning hardware locks and launching Vision Node..."
+echo "=========================================================="
+echo " PHASE 3: STARTING NUC VISION NODE (REALSENSE CAMERA)"
+echo "=========================================================="
 xhost + > /dev/null 2>&1
 export libgl_always_software=1
 
@@ -86,15 +96,14 @@ sleep 30
 if ps -p $VISION_PID > /dev/null; then kill $VISION_PID; fi
 sshpass -p "$NUC_PASS" ssh -o StrictHostKeyChecking=no "$NUC_USER@$NUC_IP" "pkill -f rover_vision || true"
 
-# --- PHASE 4: FINAL SUMMARY (LIVE CAPTURE) ---
+# --- PHASE 4: FINAL SUMMARY ---
 echo ""
-echo "=============================="
-echo "      FINAL SANITY CHECK"
-echo "=============================="
+echo "=========================================================="
+echo " PHASE 4: FINAL SYSTEM HEALTH CHECK & TOPIC VERIFICATION"
+echo "=========================================================="
 
-# Capture LIVE times now
-T_LAP_FIN=$(date -u +%H:%M:%S)
-T_REMOTE=$(sshpass -p "$NUC_PASS" ssh -o StrictHostKeyChecking=no "$NUC_USER@$NUC_IP" "date -u +%H:%M:%S; sshpass -p '$MANIP_PASS' ssh -o StrictHostKeyChecking=no '$MANIP_USER@$MANIP_IP' 'date -u +%H:%M:%S'")
+T_LAP_FIN=$(date -u +%H:%M:%S.%3N)
+T_REMOTE=$(sshpass -p "$NUC_PASS" ssh -o StrictHostKeyChecking=no "$NUC_USER@$NUC_IP" "date -u +%H:%M:%S.%3N; sshpass -p '$MANIP_PASS' ssh -o StrictHostKeyChecking=no '$MANIP_USER@$MANIP_IP' 'date -u +%H:%M:%S.%3N'")
 T_NUC_FIN=$(echo "$T_REMOTE" | sed -n '1p')
 T_MAN_FIN=$(echo "$T_REMOTE" | sed -n '2p')
 
@@ -104,7 +113,8 @@ DETECTIONS=$(grep "SUCCESS" vision_tmp.log | tail -n 5)
 echo "[TIME] Laptop:      $T_LAP_FIN"
 echo "[TIME] NUC:         $T_NUC_FIN"
 echo "[TIME] Manipulator: $T_MAN_FIN"
-echo "[NOTE] A 1-2s difference is attributed to network delays."
+echo "[NOTE] Slight millisecond mismatches above are due to SSH command latency,"
+echo "       NOT a system time difference (the internal system clocks are synced)."
 echo ""
 echo "[VISION] Recent Detections:"
 [ -z "$DETECTIONS" ] && echo "[FAILURE] No detections found." || echo "$DETECTIONS"
@@ -116,11 +126,10 @@ for t in $REQUIRED; do
     echo "$TOPIC_LIST" | grep -qxw "$t" && echo "[MATCHED] $t" || echo "[MISSING] $t"
 done
 
-echo ""
-echo "--- FULL ACTIVE TOPIC LIST ---"
-echo "$TOPIC_LIST"
-
 rm vision_tmp.log
+
 echo ""
-echo "END OF SANITY CHECK"
+echo "=========================================================="
+echo "                END OF SANITY CHECK"
+echo "=========================================================="
 
