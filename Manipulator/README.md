@@ -216,12 +216,15 @@ scp -r ~/mycobot_ws/src/my_cobot_control elephant@10.0.1.3:~/ros2_ws/src/
 ssh elephant@10.0.1.3
 
 # sync time
-sudo date -s "$(ssh leo-rover-12@10.0.1.4 'date -u +%Y-%m-%d\ %H:%M:%S.%N')"
-sudo date -s "$(ssh student42@10.0.1.5 'date -u +%Y-%m-%d\ %H:%M:%S.%N')"
+# sudo date -s "$(ssh leo-rover-12@10.0.1.4 'date -u +%Y-%m-%d\ %H:%M:%S.%N')"
+# sudo date -s "$(ssh student42@10.0.1.5 'date -u +%Y-%m-%d\ %H:%M:%S.%N')"
 
-TS=$(ssh leo-rover-12@10.0.1.4 "date -u +%Y-%m-%d\ %H:%M:%S.%N") || { echo "SSH failed"; exit 1; }
-[ -n "$TS" ] || { echo "Empty time string"; exit 1; }
-sudo date -u -s "$TS"
+# TS=$(ssh leo-rover-12@10.0.1.4 "date -u +%Y-%m-%d\ %H:%M:%S.%N") || { echo "SSH failed"; exit 1; }
+# [ -n "$TS" ] || { echo "Empty time string"; exit 1; }
+# sudo date -u -s "$TS"
+
+# Check Sync Time
+chronyc sources -v
 
 # Build on Pi
 cd ~/ros2_ws
@@ -310,7 +313,7 @@ ros2 launch my_cobot_control mycobot_with_rviz.launch.py
 ros2 topic pub --once /arm/target_pick geometry_msgs/msg/Point "{x: -0.006982066202908754, y: -0.009772047400474548, z: 0.18200001120567322}"
 
 # Send place command in camera frame in meter
-ros2 topic pub --once /arm/target_place geometry_msgs/msg/Point "{x: -0.042749661952257156, y: 0.00038108081207610667, z: 0.15700000524520874}"
+ros2 topic pub --once /arm/target_place geometry_msgs/msg/Point "{x: -0.03592269495129585, y: 0.029966816306114197, z: 0.1600000113248825}"
 ```
 
 
