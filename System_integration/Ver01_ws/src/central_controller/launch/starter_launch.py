@@ -108,7 +108,7 @@ def generate_launch_description():
         output='screen'
     )
 
-    nav2_params_file = PathJoinSubstitution([controller_pkg_dir, 'config', 'nav2_params.yaml'])
+    nav2_params_file = PathJoinSubstitution([controller_pkg_dir, 'config', 'nav2_params_smac2d_rpp.yaml'])
 
     nav2_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -150,7 +150,7 @@ def generate_launch_description():
 
     task_manager_node = Node(
         package='central_controller',
-        executable='task_manager_v2',
+        executable='task_manager_v3',
         name='task_manager',
         output='screen',
         parameters=[{

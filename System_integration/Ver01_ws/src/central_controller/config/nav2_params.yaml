@@ -124,7 +124,7 @@ controller_server:
       temperature: 0.3
       gamma: 0.015
       motion_model: "DiffDrive"
-      visualize: true
+      visualize: false
       regenerate_noises: true
       TrajectoryVisualizer:
         trajectory_step: 5
@@ -208,7 +208,7 @@ local_costmap:
       height: 3
       resolution: 0.05
       # 与 footprint 一致；若仅用圆形模型，应 ≥ 实际外接半径（否则 Smac/MPPI 会报警）
-      footprint: "[[0.212, 0.2225], [0.212, -0.2225], [-0.212, -0.2225], [-0.212, 0.2225]]" # change to square robot footprint
+      footprint: "[[0.112, 0.1225], [0.112, -0.1225], [-0.112, -0.1225], [-0.112, 0.1225]]" # change to square robot footprint
       plugins: ["voxel_layer", "inflation_layer"]
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
