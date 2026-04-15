@@ -10,23 +10,25 @@ CURRENT_USER=$(whoami)
 echo "[INFO] Running as local user: $CURRENT_USER"
 
 # 2. Subnet Validation Check
+# Verifies if the laptop has an IP in the 10.42.0.x range
 CHECK_SUBNET=$(ip -4 addr show | grep "10.42.0.")
 if [ -z "$CHECK_SUBNET" ]; then
     echo "----------------------------------------------------------"
     echo "[CRITICAL FAILURE] Subnet Mismatch"
     echo "Your laptop is NOT on the 10.42.0.x network."
-    echo "Please set a Manual/Static IP (e.g., 10.42.0.50) in your"
-    echo "Network Settings before running this script."
+    echo "Common Fix: Go to Network Settings -> IPv4 -> Manual"
+    echo "Set IP: 10.42.0.50, Netmask: 255.255.255.0"
     echo "----------------------------------------------------------"
     exit 1
 fi
 echo "[SUCCESS] Laptop is on the correct subnet (10.42.0.x)"
 
 # 3. Securely prompt for the local laptop's sudo password
+# This is required to install dependencies and flush network cache
 read -s -p "[SUDO] Enter password for $CURRENT_USER: " LOCAL_PASS
 echo ""
 
-# 4. Dependency Check
+# 4. Dependency Check (Auto-Install)
 DEPS=("sshpass" "arp-scan")
 for dep in "${DEPS[@]}"; do
     if ! command -v "$dep" &> /dev/null; then
@@ -36,11 +38,11 @@ for dep in "${DEPS[@]}"; do
     fi
 done
 
-# 5. Pre-execution: Clear ARP cache
+# 5. Pre-execution: Clear local network cache
 echo "[PRE-CHECK] Flushing laptop ARP cache..."
 echo "$LOCAL_PASS" | sudo -S ip neigh flush all > /dev/null 2>&1
 
-# Configuration (Hardware IDs and Remote Credentials)
+# Configuration (Hardware MAC and Remote Credentials)
 TARGET_MAC="8c:e9:ee:3a:83:0b"
 NUC_USER="leo-rover-12"
 NUC_PASS="team12"
@@ -55,6 +57,7 @@ echo "=========================================================="
 echo " PHASE 1: DISCOVERING NUC & SYNCING LAPTOP TO NUC CLOCK"
 echo "=========================================================="
 
+# Automatically detect the specific interface connected to the robot
 INTERFACE=$(ip -4 addr show | grep "10.42.0." | awk '{print $NF}')
 NUC_IP=""
 
@@ -70,7 +73,7 @@ for ((i=1; i<=10; i++)); do
 done
 
 if [ -z "$NUC_IP" ]; then 
-    echo "[FAILURE] NUC MAC not found on $INTERFACE."
+    echo "[FAILURE] NUC MAC not found on interface $INTERFACE."
     exit 1
 fi
 
