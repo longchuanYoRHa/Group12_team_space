@@ -5,13 +5,43 @@ echo "=========================================================="
 echo "                STARTING SANITY CHECK"
 echo "=========================================================="
 
-# Pre-execution: Clear ARP cache to ensure fresh network discovery
-echo "[PRE-CHECK] Flushing laptop ARP cache..."
-echo "Manchester1824104" | sudo -S ip neigh flush all > /dev/null 2>&1
+# 1. Capture Laptop Details
+CURRENT_USER=$(whoami)
+echo "[INFO] Running as local user: $CURRENT_USER"
 
-# Configuration
+# 2. Subnet Validation Check
+CHECK_SUBNET=$(ip -4 addr show | grep "10.42.0.")
+if [ -z "$CHECK_SUBNET" ]; then
+    echo "----------------------------------------------------------"
+    echo "[CRITICAL FAILURE] Subnet Mismatch"
+    echo "Your laptop is NOT on the 10.42.0.x network."
+    echo "Please set a Manual/Static IP (e.g., 10.42.0.50) in your"
+    echo "Network Settings before running this script."
+    echo "----------------------------------------------------------"
+    exit 1
+fi
+echo "[SUCCESS] Laptop is on the correct subnet (10.42.0.x)"
+
+# 3. Securely prompt for the local laptop's sudo password
+read -s -p "[SUDO] Enter password for $CURRENT_USER: " LOCAL_PASS
+echo ""
+
+# 4. Dependency Check
+DEPS=("sshpass" "arp-scan")
+for dep in "${DEPS[@]}"; do
+    if ! command -v "$dep" &> /dev/null; then
+        echo "[SETUP] Missing $dep. Installing..."
+        echo "$LOCAL_PASS" | sudo -S apt update -y > /dev/null 2>&1
+        echo "$LOCAL_PASS" | sudo -S apt install -y "$dep" > /dev/null 2>&1
+    fi
+done
+
+# 5. Pre-execution: Clear ARP cache
+echo "[PRE-CHECK] Flushing laptop ARP cache..."
+echo "$LOCAL_PASS" | sudo -S ip neigh flush all > /dev/null 2>&1
+
+# Configuration (Hardware IDs and Remote Credentials)
 TARGET_MAC="8c:e9:ee:3a:83:0b"
-S_PASS="Manchester1824104"
 NUC_USER="leo-rover-12"
 NUC_PASS="team12"
 MANIP_IP="10.0.1.3"
@@ -24,24 +54,30 @@ echo ""
 echo "=========================================================="
 echo " PHASE 1: DISCOVERING NUC & SYNCING LAPTOP TO NUC CLOCK"
 echo "=========================================================="
+
+INTERFACE=$(ip -4 addr show | grep "10.42.0." | awk '{print $NF}')
 NUC_IP=""
+
 for ((i=1; i<=10; i++)); do
-    SCAN_RESULT=$(echo "$S_PASS" | sudo -S arp-scan --localnet 2>/dev/null | grep -i "$TARGET_MAC")
+    SCAN_RESULT=$(echo "$LOCAL_PASS" | sudo -S arp-scan --interface="$INTERFACE" --localnet 2>/dev/null | grep -i "$TARGET_MAC")
     if [ ! -z "$SCAN_RESULT" ]; then
         NUC_IP=$(echo "$SCAN_RESULT" | awk '{print $1}')
-        echo "[SUCCESS] NUC found at IP: $NUC_IP"
+        echo "[SUCCESS] NUC found at IP: $NUC_IP on interface $INTERFACE"
         break
     fi
     echo -ne "Attempt $i/10: Searching for MAC $TARGET_MAC...\\r"
     sleep 5
 done
 
-if [ -z "$NUC_IP" ]; then echo "[FAILURE] NUC MAC not found."; exit 1; fi
+if [ -z "$NUC_IP" ]; then 
+    echo "[FAILURE] NUC MAC not found on $INTERFACE."
+    exit 1
+fi
 
 echo "[STEP] Syncing Laptop clock to NUC via SSH NTP..."
 TS=$(sshpass -p "$NUC_PASS" ssh -o StrictHostKeyChecking=no "$NUC_USER@$NUC_IP" "date -u +'%Y-%m-%d %H:%M:%S.%N'")
 if [ -n "$TS" ]; then
-    echo "$S_PASS" | sudo -S date -u -s "$TS" > /dev/null
+    echo "$LOCAL_PASS" | sudo -S date -u -s "$TS" > /dev/null
     echo "[SUCCESS] Laptop synced to NUC time."
 else
     echo "[FAILURE] Could not fetch time from NUC."; exit 1
@@ -113,11 +149,10 @@ DETECTIONS=$(grep "SUCCESS" vision_tmp.log | tail -n 5)
 echo "[TIME] Laptop:      $T_LAP_FIN"
 echo "[TIME] NUC:         $T_NUC_FIN"
 echo "[TIME] Manipulator: $T_MAN_FIN"
-echo "[NOTE] Slight millisecond mismatches above are due to SSH command latency,"
-echo "       NOT a system time difference (the internal system clocks are synced)."
+echo "[NOTE] SSH latency causes small summary mismatches; system clocks are synced."
 echo ""
 echo "[VISION] Recent Detections:"
-[ -z "$DETECTIONS" ] && echo "[FAILURE] No detections found." || echo "$DETECTIONS"
+[ -z "$DETECTIONS" ] && echo "[FAILURE] No detections found. (Node is active)" || echo "$DETECTIONS"
 echo ""
 
 echo "--- TOPIC MATCH LIST ---"
