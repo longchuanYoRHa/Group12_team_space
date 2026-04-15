@@ -233,8 +233,8 @@ class TaskManagerNodeV2(Node):
         self.state_timer = self.create_timer(0.1, self._state_timer_callback)
 
         # ========== 参数 ==========
-        self.declare_parameter('pregrasp_distance', 0.26)
-        self.declare_parameter('preplace_distance', 0.26)
+        self.declare_parameter('pregrasp_distance', 0.5)
+        self.declare_parameter('preplace_distance', 0.6)
         self.declare_parameter('camera_frame_id', 'D435i_camera_link') # change to 'D435i_camera_link' for simulation
         self.declare_parameter('maps_directory', '')
         self.declare_parameter('map_save_basename', 'explore_complete')
