@@ -15,7 +15,7 @@ def generate_launch_description():
 
     sim_world = DeclareLaunchArgument(
         "sim_world",
-        default_value=os.path.join(pkg_directory, "worlds", "testmap02.sdf"),
+        default_value=os.path.join(pkg_directory, "worlds", "testspace01.sdf"),
         description="Path to the Gazebo world file",
     )
 

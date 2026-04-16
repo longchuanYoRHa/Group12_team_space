@@ -1,0 +1,76 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="leo_sim_with_lidar">
+
+  <xacro:arg name="fixed" default="false"/>
+  <xacro:arg name="robot_ns" default=""/>
+  <xacro:arg name="mecanum_wheels" default="false"/>
+
+  <xacro:include filename="$(find leo_description)/urdf/macros.xacro"/>
+
+  <xacro:property name="robot_ns_value" value="$(arg robot_ns)"/>
+  <xacro:property name="link_prefix" value=""/>
+  <xacro:property name="scan_topic" value="scan"/>
+
+  <xacro:if value="${robot_ns_value != '' and robot_ns_value != '/'}">
+    <xacro:property name="link_prefix" value="${robot_ns_value + '/'}"/>
+    <xacro:property name="scan_topic" value="${robot_ns_value + '/scan'}"/>
+  </xacro:if>
+
+  <xacro:leo_sim
+    robot_ns="${robot_ns_value}"
+    fixed="$(arg fixed)"
+    mecanum_wheels="$(arg mecanum_wheels)"/>
+
+  <link name="${link_prefix}laser">
+    <inertial>
+      <mass value="0.15"/>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <inertia ixx="1e-4" ixy="0" ixz="0" iyy="1e-4" iyz="0" izz="1e-4"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <cylinder length="0.05" radius="0.01"/>
+      </geometry>
+      <material name="laser_material">
+        <color rgba="1 0 0 1"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <cylinder length="0.05" radius="0.01"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <joint name="${link_prefix}base_to_laser" type="fixed">
+    <parent link="${link_prefix}base_link"/>
+    <child link="${link_prefix}laser"/>
+    <origin xyz="0.1758 0.0 -0.10553" rpy="3.14159 0 3.14159"/>
+  </joint>
+
+  <gazebo reference="${link_prefix}laser">
+    <sensor name="lidar" type="gpu_lidar">
+      <always_on>true</always_on>
+      <update_rate>10</update_rate>
+      <visualize>true</visualize>
+      <topic>${scan_topic}</topic>
+      <ray>
+        <scan>
+          <horizontal>
+            <samples>720</samples>
+            <min_angle>-3.14159</min_angle>
+            <max_angle>3.14159</max_angle>
+          </horizontal>
+        </scan>
+        <range>
+          <min>0.12</min>
+          <max>12.0</max>
+        </range>
+      </ray>
+      <gz_frame_id>${link_prefix}laser</gz_frame_id>
+    </sensor>
+  </gazebo>
+
+</robot>
