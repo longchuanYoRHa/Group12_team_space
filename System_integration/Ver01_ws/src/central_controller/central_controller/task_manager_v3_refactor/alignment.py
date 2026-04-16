@@ -21,10 +21,66 @@ class TaskManagerAlignmentMixin:
         self._dock_goal_sent = False
         self._dock_goal_handle = None
         self._dock_result_future = None
+        self._precision_align_waiting_for_object_z_check = False
         self.wait_at_point_start_time = time.monotonic()
         self.get_logger().info(
             f"Entered PRECISION_ALIGN (source={source_purpose.value}); waiting for vision trigger."
         )
+
+    def _build_dock_target_pose_from_vision(
+        self,
+        point_msg: geometry_msgs.Point,
+        *,
+        stop_dist: float | None = None,
+        robot_delta: float | None = None,
+    ):
+        cube_pose_odom = self._point_to_pose_stamped_in_frame(point_msg, "odom")
+        robot_x, robot_y = self._get_robot_xy_in_frame("odom")
+        cx = cube_pose_odom.pose.position.x
+        cy = cube_pose_odom.pose.position.y
+        dx = cx - robot_x
+        dy = cy - robot_y
+        dist = math.hypot(dx, dy)
+        if dist < 1e-6:
+            raise RuntimeError("invalid cube distance")
+
+        ux = dx / dist
+        uy = dy / dist
+        if robot_delta is not None:
+            tx = robot_x + ux * robot_delta
+            ty = robot_y + uy * robot_delta
+        else:
+            if stop_dist is None:
+                raise RuntimeError("stop_dist or robot_delta must be provided")
+            tx = cx - ux * stop_dist
+            ty = cy - uy * stop_dist
+
+        target_pose = geometry_msgs.PoseStamped()
+        target_pose.header.frame_id = "odom"
+        target_pose.header.stamp = self.get_clock().now().to_msg()
+        target_pose.pose.position.x = tx
+        target_pose.pose.position.y = ty
+        target_pose.pose.position.z = 0.0
+        target_pose.pose.orientation = quaternion_from_yaw(math.atan2(cy - ty, cx - tx))
+        return target_pose, dist, (tx, ty)
+
+    def _send_dock_goal(self, target_pose: geometry_msgs.PoseStamped, log_reason: str):
+        self.get_logger().info(
+            "PRECISION_ALIGN: sending DockRobot goal "
+            f"({log_reason}, target=({target_pose.pose.position.x:.3f},"
+            f"{target_pose.pose.position.y:.3f}) odom)."
+        )
+
+        goal = DockRobot.Goal()
+        goal.use_dock_id = False
+        goal.dock_pose = target_pose
+        goal.dock_type = self.get_parameter("dock_type").value
+        goal.navigate_to_staging_pose = False
+        goal.max_staging_time = 0.0
+
+        send_goal_future = self.dock_client.send_goal_async(goal)
+        send_goal_future.add_done_callback(self._dock_goal_response_callback)
+        self._dock_goal_sent = True
 
     def _handle_precision_align_timeout_if_needed(self):
         if self._precision_align_source_purpose != NavPurpose.INTEREST_POINT:
@@ -76,54 +132,54 @@ class TaskManagerAlignmentMixin:
                 TaskState.GRASP if is_object else TaskState.PLACE_IN_BIN
             )
 
-        stop_dist = float(self.get_parameter("docking_stop_distance_m").value)
-        stop_dist = max(0.0, stop_dist)
+        target_z = float(self.get_parameter("grasp_target_camera_z_m").value)
+        z_tol = abs(float(self.get_parameter("grasp_target_camera_z_tolerance_m").value))
 
-        try:
-            cube_pose_odom = self._point_to_pose_stamped_in_frame(point_msg, "odom")
-            robot_x, robot_y = self._get_robot_xy_in_frame("odom")
-            cx = cube_pose_odom.pose.position.x
-            cy = cube_pose_odom.pose.position.y
-            dx = cx - robot_x
-            dy = cy - robot_y
-            dist = (dx * dx + dy * dy) ** 0.5
-            if dist < 1e-6:
-                self.get_logger().warn(
-                    "PRECISION_ALIGN: invalid cube distance; skip DockRobot goal."
+        if is_object and self._precision_align_waiting_for_object_z_check:
+            z_error = point_msg.z - target_z
+            if abs(z_error) <= z_tol:
+                self.get_logger().info(
+                    "PRECISION_ALIGN: object camera z within grasp tolerance "
+                    f"(z={point_msg.z:.3f} m, target={target_z:.3f} +/- {z_tol:.3f})."
+                )
+                self._precision_align_waiting_for_object_z_check = False
+                self.state = TaskState.GRASP
+                self._arm_cmd_sent = False
+                return
+
+            try:
+                target_pose, _, _ = self._build_dock_target_pose_from_vision(
+                    point_msg,
+                    robot_delta=z_error,
+                )
+            except Exception as exc:
+                self.get_logger().error(
+                    f"PRECISION_ALIGN: refine DockRobot goal failed: {exc}"
                 )
                 return
 
-            ux = dx / dist
-            uy = dy / dist
-            tx = cx - ux * stop_dist
-            ty = cy - uy * stop_dist
+            self._precision_align_waiting_for_object_z_check = False
+            self._send_dock_goal(
+                target_pose,
+                (
+                    "refine_by_camera_z "
+                    f"(z={point_msg.z:.3f} m, target={target_z:.3f} m, "
+                    f"error={z_error:.3f} m)"
+                ),
+            )
+            return
 
-            target_pose = geometry_msgs.PoseStamped()
-            target_pose.header.frame_id = "odom"
-            target_pose.header.stamp = self.get_clock().now().to_msg()
-            target_pose.pose.position.x = tx
-            target_pose.pose.position.y = ty
-            target_pose.pose.position.z = 0.0
-            target_pose.pose.orientation = quaternion_from_yaw(math.atan2(cy - ty, cx - tx))
+        stop_dist = max(0.0, float(self.get_parameter("docking_stop_distance_m").value))
+        try:
+            target_pose, _, _ = self._build_dock_target_pose_from_vision(
+                point_msg,
+                stop_dist=stop_dist,
+            )
         except Exception as exc:
             self.get_logger().error(f"PRECISION_ALIGN: build DockRobot goal failed: {exc}")
             return
 
-        self.get_logger().info(
-            "PRECISION_ALIGN: vision trigger received, sending DockRobot goal "
-            f"(stop_dist={stop_dist:.2f} m, target=({tx:.3f},{ty:.3f}) odom)."
-        )
-
-        goal = DockRobot.Goal()
-        goal.use_dock_id = False
-        goal.dock_pose = target_pose
-        goal.dock_type = self.get_parameter("dock_type").value
-        goal.navigate_to_staging_pose = False
-        goal.max_staging_time = 0.0
-
-        send_goal_future = self.dock_client.send_goal_async(goal)
-        send_goal_future.add_done_callback(self._dock_goal_response_callback)
-        self._dock_goal_sent = True
+        self._send_dock_goal(target_pose, f"stop_dist={stop_dist:.3f} m")
 
     def _dock_goal_response_callback(self, future):
         try:
@@ -159,7 +215,12 @@ class TaskManagerAlignmentMixin:
 
         if result.success:
             self.get_logger().info("PRECISION_ALIGN: DockRobot succeeded.")
-            if self._precision_align_next_state is not None:
+            if self._precision_align_next_state == TaskState.GRASP:
+                self._precision_align_waiting_for_object_z_check = True
+                self.get_logger().info(
+                    "PRECISION_ALIGN: waiting for post-dock object camera z check."
+                )
+            elif self._precision_align_next_state is not None:
                 self.state = self._precision_align_next_state
                 self._arm_cmd_sent = False
             else:
@@ -170,6 +231,7 @@ class TaskManagerAlignmentMixin:
             self.get_logger().warn(
                 f"PRECISION_ALIGN: DockRobot failed (error_code={result.error_code})."
             )
+            self._precision_align_waiting_for_object_z_check = False
 
         self._dock_goal_sent = False
         self._dock_goal_handle = None

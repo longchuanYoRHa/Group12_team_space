@@ -123,6 +123,8 @@ class TaskManagerExplorationMixin:
 
         if self.state == TaskState.PRECISION_ALIGN:
             self._handle_precision_align_vision(point_msg=msg, is_object=True)
+            if self.state == TaskState.GRASP:
+                self._execute_grasp_with_current_object(msg, color)
             return
 
         if self.state == TaskState.NAV_TO_OBJECT_PREGRASP:

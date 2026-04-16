@@ -212,7 +212,9 @@ class TaskManagerNodeV3(
         self.declare_parameter("docking_angular_speed_max_rps", 0.25)
         self.declare_parameter("docking_yaw_kp", 1.5)
         self.declare_parameter("docking_y_tolerance_m", 0.01)
-        self.declare_parameter("docking_stop_distance_m", 0.20)
+        self.declare_parameter("docking_stop_distance_m", 0.265)
+        self.declare_parameter("grasp_target_camera_z_m", 0.265)
+        self.declare_parameter("grasp_target_camera_z_tolerance_m", 0.01)
         self.declare_parameter("backup_distance_m", 0.20)
         self.declare_parameter("pre_explore_spin_enable", True)
         self.declare_parameter("pre_explore_nav_offset_x_m", 0.3)
@@ -257,6 +259,7 @@ class TaskManagerNodeV3(
         self._docking_phase = "rotate"
         self._last_docking_target_base_m = None
         self._dock_goal_sent = False
+        self._precision_align_waiting_for_object_z_check = False
         self._backup_end_time = None
         self._backup_next_state = None
         self._backup_after_restore_explore_resume = None
