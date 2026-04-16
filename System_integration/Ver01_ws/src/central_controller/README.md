@@ -121,8 +121,7 @@ The current implementation no longer uses the older intermediate states describe
 | `INIT` | Wait for Nav2 / TF, save home pose, run startup preparation. |
 | `PRE_EXPLORE_SPIN` | Pre-navigation before exploration: move to a fixed offset from home. |
 | `EXPLORE` | Frontier exploration is running. |
-| `NAV_TO_OBJECT_PREGRASP` | Navigate to the pre-grasp pose in front of the object. |
-| `PRECISION_ALIGN` | Fine alignment after reaching the pre-pose. |
+| `PRECISION_ALIGN` | Fine alignment toward the object or bin (entered directly from explore / nav). |
 | `GRASP` | Grasp phase. |
 | `RESUME_EXPLORE_FOR_BIN` | Resume exploration to search for the next target (e.g. bin). |
 | `NAV_TO_BIN_PREPLACE` | Navigate to the pre-place pose in front of the bin. |

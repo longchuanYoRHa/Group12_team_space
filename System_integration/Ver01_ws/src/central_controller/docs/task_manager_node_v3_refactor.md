@@ -112,14 +112,13 @@
 1. `INIT`
 2. 可选 `PRE_EXPLORE_SPIN`
 3. `EXPLORE`
-4. 发现 object 后进入 `NAV_TO_OBJECT_PREGRASP`
-5. 导航成功后进入 `PRECISION_ALIGN`
-6. 对位完成进入 `GRASP`
-7. 抓取成功后后退并进入 `RESUME_EXPLORE_FOR_BIN`
-8. 发现 bin 后进入 `NAV_TO_BIN_PREPLACE`
-9. 再次 `PRECISION_ALIGN`
-10. 对位完成进入 `PLACE_IN_BIN`
-11. 放置成功后后退，再回到 `EXPLORE` 或 fallback 兴趣点导航
+4. 发现 object 后暂停探索并进入 `PRECISION_ALIGN`（物体预抓取对位）
+5. 对位完成进入 `GRASP`
+6. 抓取成功后后退并进入 `RESUME_EXPLORE_FOR_BIN`
+7. 发现 bin 后进入 `NAV_TO_BIN_PREPLACE`
+8. 再次 `PRECISION_ALIGN`
+9. 对位完成进入 `PLACE_IN_BIN`
+10. 放置成功后后退，再回到 `EXPLORE` 或 fallback 兴趣点导航
 
 如果探索结束但仍有未完成目标，则会：
 

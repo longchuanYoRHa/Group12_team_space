@@ -16,7 +16,6 @@ class TaskState(Enum):
     INIT = "init"
     PRE_EXPLORE_SPIN = "pre_explore_spin"
     EXPLORE = "explore"
-    NAV_TO_OBJECT_PREGRASP = "nav_to_object_pregrasp"
     PRECISION_ALIGN = "precision_align"
     GRASP = "grasp"
     RESUME_EXPLORE_FOR_BIN = "resume_explore_for_bin"

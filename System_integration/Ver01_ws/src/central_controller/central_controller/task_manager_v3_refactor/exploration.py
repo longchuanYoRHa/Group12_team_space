@@ -126,9 +126,6 @@ class TaskManagerExplorationMixin:
                 self._execute_grasp_with_current_object(msg, color)
             return
 
-        if self.state == TaskState.NAV_TO_OBJECT_PREGRASP:
-            return
-
         try:
             pose_stamped = self._point_to_pose_stamped_in_map(msg)
         except Exception as exc:

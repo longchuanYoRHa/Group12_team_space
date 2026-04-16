@@ -326,7 +326,7 @@ docking_server:
     - simple_non_charging_dock
     simple_non_charging_dock:
       plugin: opennav_docking::SimpleNonChargingDock
-      docking_threshold: 0.05
+      docking_threshold: 0.001
       staging_x_offset: -0.7
       use_external_detection_pose: false
       use_battery_status: false
