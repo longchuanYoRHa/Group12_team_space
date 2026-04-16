@@ -16,6 +16,50 @@ from central_controller.task_manager_v3_refactor.models import (
 
 
 class TaskManagerNavigationMixin:
+    def _build_camera_point_stamped(self, point_msg: geometry_msgs.Point):
+        frame_id = str(self.get_parameter("camera_frame_id").value)
+        point_stamped = geometry_msgs.PointStamped()
+        point_stamped.header.frame_id = frame_id
+        point_stamped.header.stamp = rclpy.time.Time().to_msg()
+        point_stamped.point = point_msg
+        return point_stamped
+
+    def _transform_camera_point(self, point_msg: geometry_msgs.Point, target_frame: str):
+        frame_id = str(self.get_parameter("camera_frame_id").value)
+        point_stamped = self._build_camera_point_stamped(point_msg)
+        timeout = rclpy.duration.Duration(seconds=0.5)
+
+        try:
+            transform = self.tf_buffer.lookup_transform(
+                target_frame,
+                frame_id,
+                rclpy.time.Time(),
+                timeout=timeout,
+            )
+            return tf2_geometry_msgs.do_transform_point(point_stamped, transform)
+        except Exception as exc:
+            if target_frame not in ("map", "odom"):
+                raise
+
+            self.get_logger().warn(
+                f"Direct TF {target_frame}<-{frame_id} failed, retry via base_link: {exc}"
+            )
+
+        cam_to_base = self.tf_buffer.lookup_transform(
+            "base_link",
+            frame_id,
+            rclpy.time.Time(),
+            timeout=timeout,
+        )
+        point_in_base = tf2_geometry_msgs.do_transform_point(point_stamped, cam_to_base)
+        base_to_target = self.tf_buffer.lookup_transform(
+            target_frame,
+            "base_link",
+            rclpy.time.Time(),
+            timeout=timeout,
+        )
+        return tf2_geometry_msgs.do_transform_point(point_in_base, base_to_target)
+
     def _get_point_in_base_link_mm(self, pose_stamped: geometry_msgs.PoseStamped):
         try:
             transform = self.tf_buffer.lookup_transform(
@@ -35,19 +79,8 @@ class TaskManagerNavigationMixin:
             return None
 
     def _point_camera_to_base_link_mm(self, point_msg: geometry_msgs.Point):
-        frame_id = self.get_parameter("camera_frame_id").value
-        point_stamped = geometry_msgs.PointStamped()
-        point_stamped.header.frame_id = frame_id
-        point_stamped.header.stamp = self.get_clock().now().to_msg()
-        point_stamped.point = point_msg
         try:
-            transform = self.tf_buffer.lookup_transform(
-                "base_link",
-                frame_id,
-                rclpy.time.Time(),
-                timeout=rclpy.duration.Duration(seconds=0.5),
-            )
-            point_in_base = tf2_geometry_msgs.do_transform_point(point_stamped, transform)
+            point_in_base = self._transform_camera_point(point_msg, "base_link")
             pt = geometry_msgs.Point()
             pt.x = point_in_base.point.x * 1000.0
             pt.y = point_in_base.point.y * 1000.0
@@ -66,49 +99,18 @@ class TaskManagerNavigationMixin:
         self.explore_control_pub.publish(msg)
 
     def _point_to_pose_stamped_in_map(self, point_msg: geometry_msgs.Point):
-        frame_id = self.get_parameter("camera_frame_id").value
-        point_stamped = geometry_msgs.PointStamped()
-        point_stamped.header.frame_id = frame_id
-        point_stamped.header.stamp = self.get_clock().now().to_msg()
-        point_stamped.point = point_msg
-        try:
-            transform = self.tf_buffer.lookup_transform(
-                "map",
-                frame_id,
-                rclpy.time.Time(),
-                timeout=rclpy.duration.Duration(seconds=0.5),
-            )
-            point_in_map = tf2_geometry_msgs.do_transform_point(point_stamped, transform)
-            pose_stamped = geometry_msgs.PoseStamped()
-            pose_stamped.header.frame_id = "map"
-            pose_stamped.header.stamp = self.get_clock().now().to_msg()
-            pose_stamped.pose.position = point_in_map.point
-            pose_stamped.pose.orientation.w = 1.0
-            return pose_stamped
-        except Exception as exc:
-            self.get_logger().warn(f"TF transform failed: {exc}, using raw coords (assumed map)")
-            pose_stamped = geometry_msgs.PoseStamped()
-            pose_stamped.header.frame_id = "map"
-            pose_stamped.header.stamp = self.get_clock().now().to_msg()
-            pose_stamped.pose.position = point_msg
-            pose_stamped.pose.orientation.w = 1.0
-            return pose_stamped
+        point_in_map = self._transform_camera_point(point_msg, "map")
+        pose_stamped = geometry_msgs.PoseStamped()
+        pose_stamped.header.frame_id = "map"
+        pose_stamped.header.stamp = self.get_clock().now().to_msg()
+        pose_stamped.pose.position = point_in_map.point
+        pose_stamped.pose.orientation.w = 1.0
+        return pose_stamped
 
     def _point_to_pose_stamped_in_frame(
         self, point_msg: geometry_msgs.Point, target_frame: str
     ):
-        frame_id = self.get_parameter("camera_frame_id").value
-        point_stamped = geometry_msgs.PointStamped()
-        point_stamped.header.frame_id = frame_id
-        point_stamped.header.stamp = self.get_clock().now().to_msg()
-        point_stamped.point = point_msg
-        transform = self.tf_buffer.lookup_transform(
-            target_frame,
-            frame_id,
-            rclpy.time.Time(),
-            timeout=rclpy.duration.Duration(seconds=0.5),
-        )
-        point_in_target = tf2_geometry_msgs.do_transform_point(point_stamped, transform)
+        point_in_target = self._transform_camera_point(point_msg, target_frame)
         pose_stamped = geometry_msgs.PoseStamped()
         pose_stamped.header.frame_id = target_frame
         pose_stamped.header.stamp = self.get_clock().now().to_msg()

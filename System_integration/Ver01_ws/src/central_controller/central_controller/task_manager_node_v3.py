@@ -201,7 +201,7 @@ class TaskManagerNodeV3(
     def _declare_parameters(self) -> None:
         self.declare_parameter("pregrasp_distance", 0.5)
         self.declare_parameter("preplace_distance", 0.6)
-        self.declare_parameter("camera_frame_id", "D435i_camera_link")
+        self.declare_parameter("camera_frame_id", "camera_link")
         self.declare_parameter("maps_directory", "")
         self.declare_parameter("map_save_basename", "explore_complete")
         self.declare_parameter("map_resolution", DEFAULT_RESOLUTION)

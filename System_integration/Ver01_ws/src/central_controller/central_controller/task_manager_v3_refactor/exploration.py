@@ -170,30 +170,29 @@ class TaskManagerExplorationMixin:
         if self.state == TaskState.EXPLORE:
             self.get_logger().info(
                 f"Object found during EXPLORE, coords=({pose_stamped.pose.position.x:.2f}, "
-                f"{pose_stamped.pose.position.y:.2f}), stopping explore and nav to pregrasp."
+                f"{pose_stamped.pose.position.y:.2f}), stopping explore and docking directly."
             )
             self._publish_explore_resume_if_changed(False)
             self._cancel_nav2_goal_if_any()
+            self._enter_precision_align(
+                NavPurpose.OBJECT_PREGRASP,
+                next_state_after_align=TaskState.GRASP,
+            )
         else:
             self.get_logger().info(
                 "Object found during WAIT_AT_INTEREST_POINT, "
                 f"coords=({pose_stamped.pose.position.x:.2f}, "
-                f"{pose_stamped.pose.position.y:.2f}), nav to pregrasp."
+                f"{pose_stamped.pose.position.y:.2f}), docking directly."
+            )
+            self._enter_precision_align(
+                NavPurpose.INTEREST_POINT,
+                next_state_after_align=TaskState.GRASP,
             )
 
-        robot_x, robot_y = self._get_robot_xy_in_map()
-        pregrasp_distance = self.get_parameter("pregrasp_distance").value
-        goal_pose = compute_pregrasp_pose(
-            self.object_pose,
-            pregrasp_distance,
-            robot_x,
-            robot_y,
-            frame_id="map",
-            stamp=self.get_clock().now().to_msg(),
-            yaw_offset=math.pi,
+        self._handle_precision_align_vision(
+            point_msg=msg,
+            is_object=True,
         )
-        self.state = TaskState.NAV_TO_OBJECT_PREGRASP
-        self._send_nav_goal(goal_pose, NavPurpose.OBJECT_PREGRASP)
 
     def _object_point_callback(self, msg: geometry_msgs.Point, color: str):
         self.dispatch(ObjectVisionEvent(color, msg))
