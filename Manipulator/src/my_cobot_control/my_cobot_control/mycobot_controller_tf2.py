@@ -225,8 +225,8 @@ class MyCobotControllerTF2(Node):
         self.js_pub = self.create_publisher(JointState, 'joint_states', 10)
 
         # ---- Subscribers ----------------------------------------------------
-        self.create_subscription(Point, 'target_pick', self._pick_cb, 10)
-        self.create_subscription(Point, 'target_place', self._place_cb, 10)
+        self.pick_sub = self.create_subscription(Point, 'target_pick', self._pick_cb, 10)
+        self.place_sub = self.create_subscription(Point, 'target_place', self._place_cb, 10)
 
         # ---- Timers ---------------------------------------------------------
         self.create_timer(0.1, self._publish_joint_states)
