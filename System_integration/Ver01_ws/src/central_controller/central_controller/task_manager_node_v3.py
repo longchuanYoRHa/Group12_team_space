@@ -122,7 +122,7 @@ class TaskManagerNodeV3(
         self.current_nav_purpose = NavPurpose.NONE
 
         self.declare_parameter("dock_action_name", "dock_robot")
-        self.declare_parameter("dock_type", "simple_charging_dock")
+        self.declare_parameter("dock_type", "simple_non_charging_dock")
         self.dock_client = None
         if DockRobot is None:
             self.get_logger().warn(
