@@ -1,7 +1,7 @@
 import os
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, ExecuteProcess, TimerAction, RegisterEventHandler, LogInfo
-from launch.event_handlers import OnProcessExit, OnExecutionComplete
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, ExecuteProcess, RegisterEventHandler, LogInfo
+from launch.event_handlers import OnProcessExit
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, PythonExpression
 from launch.conditions import IfCondition, UnlessCondition
@@ -106,7 +106,7 @@ def generate_launch_description():
         package='slam_toolbox',
         executable='async_slam_toolbox_node',
         name='slam_toolbox',
-        parameters=[slam_toolbox_params_file],
+        parameters=[slam_toolbox_params_file, {'use_sim_time': use_sim_time}],
         output='screen',
     )
 
@@ -123,48 +123,19 @@ def generate_launch_description():
         }.items()
     )
 
-    # Wait for SLAM lifecycle node to be available
-    wait_for_slam_node_cmd = ExecuteProcess(
+    # Poll until slam_toolbox lifecycle becomes unconfigured, then configure + activate immediately.
+    slam_configure_activate_cmd = ExecuteProcess(
         cmd=['bash', '-c',
-             'timeout=30; elapsed=0; '
-             'until ros2 node list | grep -q "slam_toolbox"; do '
-             '  echo "Waiting for slam_toolbox node... ($elapsed/$timeout seconds)"; '
-             '  sleep 1; elapsed=$((elapsed+1)); '
-             '  if [ $elapsed -ge $timeout ]; then '
-             '    echo "ERROR: slam_toolbox node not available after $timeout seconds"; exit 1; '
+             'timeout=120; elapsed=0; '
+             'until ros2 lifecycle get /slam_toolbox 2>/dev/null | grep -q "unconfigured"; do '
+             '  sleep 0.1; elapsed=$((elapsed+1)); '
+             '  if [ $elapsed -ge $((timeout * 10)) ]; then '
+             '    echo "ERROR: slam_toolbox not unconfigured in time"; exit 1; '
              '  fi; '
              'done; '
-             'echo "slam_toolbox node is available"'],
-        output='screen'
-    )
-
-    # 5. Configure and activate slam_toolbox lifecycle
-    configure_slam_cmd = ExecuteProcess(
-        cmd=['bash', '-c',
              'ros2 lifecycle set /slam_toolbox configure && '
-             'echo "SLAM configured successfully"'],
-        output='screen'
-    )
-
-    # Wait for SLAM to be configured before activating
-    wait_for_slam_configured_cmd = ExecuteProcess(
-        cmd=['bash', '-c',
-             'timeout=10; elapsed=0; '
-             'until ros2 lifecycle get /slam_toolbox | grep -q "active\|inactive"; do '
-             '  echo "Waiting for SLAM to be configured... ($elapsed/$timeout seconds)"; '
-             '  sleep 0.5; elapsed=$((elapsed+1)); '
-             '  if [ $elapsed -ge $timeout ]; then '
-             '    echo "ERROR: SLAM configuration timeout"; exit 1; '
-             '  fi; '
-             'done; '
-             'echo "SLAM is configured"'],
-        output='screen'
-    )
-
-    activate_slam_cmd = ExecuteProcess(
-        cmd=['bash', '-c',
              'ros2 lifecycle set /slam_toolbox activate && '
-             'echo "SLAM activated successfully"'],
+             'echo "SLAM configure+activate done"'],
         output='screen'
     )
 
@@ -218,82 +189,23 @@ def generate_launch_description():
         }]
     )
     
-    # 1. Wait for /scan topic available, then start static transform and laser filter
-    static_tf_after_scan = TimerAction(
-        period=0.1,  # short delay, ensure the wait command completes
-        actions=[static_tf_base_to_laser]
-    )
-    
-    laser_filter_after_scan = TimerAction(
-        period=0.1,
-        actions=[laser_filter_node]
-    )
-    
+    # 1. Wait for /scan topic available, then start static transform, filter and SLAM.
     wait_for_scan_handler = RegisterEventHandler(
         OnProcessExit(
             target_action=wait_for_scan_cmd,
             on_exit=[
-                static_tf_after_scan,
-                laser_filter_after_scan,
+                static_tf_base_to_laser,
+                laser_filter_node,
+                slam_toolbox_node,
+                slam_configure_activate_cmd,
             ]
         )
     )
 
-    # 2. After /scan available, delay start SLAM (give transform and filter time to establish)
-    slam_after_scan = TimerAction(
-        period=2.0,  # give transform and filter time to establish
-        actions=[slam_toolbox_node]
-    )
-    
-    slam_start_handler = RegisterEventHandler(
-        OnProcessExit(
-            target_action=wait_for_scan_cmd,
-            on_exit=[slam_after_scan]
-        )
-    )
-
-    # 3. After SLAM node starts, wait for node available, then configure
-    # SLAM starts after 2 seconds when /scan is available, so the waiting node should be after 5 seconds (2 seconds start + 3 seconds wait)
-    wait_slam_node_after_start = TimerAction(
-        period=3.0,  # wait for SLAM node after 5 seconds (2 seconds start + 3 seconds wait)
-        actions=[wait_for_slam_node_cmd]
-    )
-    
-    slam_node_handler = RegisterEventHandler(
-        OnProcessExit(
-            target_action=wait_for_scan_cmd,  # after scan available, delay wait for SLAM node
-            on_exit=[wait_slam_node_after_start]
-        )
-    )
-
-    # 4. After SLAM node available, configure SLAM
-    wait_for_slam_node_handler = RegisterEventHandler(
-        OnProcessExit(
-            target_action=wait_for_slam_node_cmd,
-            on_exit=[configure_slam_cmd]
-        )
-    )
-
-    # 5. After configuring SLAM, wait for configuration to complete, then activate
-    configure_slam_handler = RegisterEventHandler(
-        OnProcessExit(
-            target_action=configure_slam_cmd,
-            on_exit=[wait_for_slam_configured_cmd]
-        )
-    )
-
-    # 6. After configuring SLAM, activate SLAM
-    wait_for_slam_configured_handler = RegisterEventHandler(
-        OnProcessExit(
-            target_action=wait_for_slam_configured_cmd,
-            on_exit=[activate_slam_cmd]
-        )
-    )
-
-    # 7. After SLAM activated, wait for /map topic available, then start Nav2
+    # 2. After SLAM configure+activate completes, wait for /map.
     activate_slam_handler = RegisterEventHandler(
         OnProcessExit(
-            target_action=activate_slam_cmd,
+            target_action=slam_configure_activate_cmd,
             on_exit=[wait_for_map_cmd]
         )
     )
@@ -319,31 +231,30 @@ def generate_launch_description():
         condition=UnlessCondition(PythonExpression(["'", use_sim_time, "' == 'true'"]))
     )
 
-    # 8. After /map topic available, reset odom once, then start Nav2
-    nav2_after_map = TimerAction(
-        period=0.1,  # short delay
-        actions=[nav2_launch],
-        condition=UnlessCondition(PythonExpression(["'", use_sim_time, "' == 'true'"]))
-    )
-
-    # In simulation, skip reset_odometry and start Nav2 directly after /map is ready.
-    nav2_after_map_sim = TimerAction(
-        period=0.1,
-        actions=[nav2_launch],
+    reset_odometry_skip_cmd = ExecuteProcess(
+        cmd=['bash', '-c', 'echo "[INFO] Simulation mode: skip /reset_odometry"; exit 0'],
+        output='screen',
         condition=IfCondition(PythonExpression(["'", use_sim_time, "' == 'true'"]))
     )
-    
+
     wait_for_map_handler = RegisterEventHandler(
         OnProcessExit(
             target_action=wait_for_map_cmd,
-            on_exit=[reset_odometry_cmd, nav2_after_map_sim]
+            on_exit=[reset_odometry_cmd, reset_odometry_skip_cmd]
         )
     )
 
     reset_odometry_handler = RegisterEventHandler(
         OnProcessExit(
             target_action=reset_odometry_cmd,
-            on_exit=[nav2_after_map],
+            on_exit=[nav2_launch, wait_for_nav_action_cmd],
+        )
+    )
+
+    reset_odometry_skip_handler = RegisterEventHandler(
+        OnProcessExit(
+            target_action=reset_odometry_skip_cmd,
+            on_exit=[nav2_launch, wait_for_nav_action_cmd],
         )
     )
 
@@ -358,29 +269,11 @@ def generate_launch_description():
         remappings=explore_remappings,
     )
 
-    # 11. After navigate_to_pose available, delay start task manager and optionally vision
-    task_manager_after_nav_action = TimerAction(
-        period=3.0,  # give Nav2 time to be ready
-        actions=[task_manager_node, custom_explore_node]
-    )
-
-    # 9. After Nav2 starts, wait for navigate_to_pose action available, then start task manager
-    wait_nav_action_after_map = TimerAction(
-        period=8.0,  # give Nav2 time to start (after /map available in 8 seconds)
-        actions=[wait_for_nav_action_cmd]
-    )
-    
-    nav2_handler = RegisterEventHandler(
-        OnProcessExit(
-            target_action=wait_for_map_cmd,  # after map available, delay wait for action
-            on_exit=[wait_nav_action_after_map]
-        )
-    )
-    
+    # 3. After navigate_to_pose action becomes available, start task manager and explore.
     wait_for_nav_action_handler = RegisterEventHandler(
         OnProcessExit(
             target_action=wait_for_nav_action_cmd,
-            on_exit=[task_manager_after_nav_action]
+            on_exit=[task_manager_node, custom_explore_node]
         )
     )
 
@@ -426,17 +319,11 @@ def generate_launch_description():
         # 2. wait for /scan topic available (both simulation and actual)
         wait_for_scan_cmd,
         
-        # 3-11. start subsequent nodes through event handler chain
-        wait_for_scan_handler,      # after /scan available, start static_tf and laser_filter
-        slam_start_handler,          # after /scan available, delay start SLAM
-        slam_node_handler,           # after /scan available, delay wait for SLAM node
-        wait_for_slam_node_handler,  # after SLAM node available, configure SLAM
-        configure_slam_handler,      # after configuring, wait for configuration to complete
-        wait_for_slam_configured_handler,  # after configuring, activate SLAM
-        activate_slam_handler,       # after activating, wait for /map
-        wait_for_map_handler,        # after /map available, reset odom before Nav2
-        reset_odometry_handler,      # after reset odom, start Nav2
-        nav2_handler,                # after /map available, delay wait for navigate_to_pose action
-        wait_for_nav_action_handler, # after navigate_to_pose action available, start explore
-        # explore_handler,              # after action available, delay start task manager and rviz
+        # 3-7. start subsequent nodes through event handler chain
+        wait_for_scan_handler,       # after /scan available, start TF/filter/SLAM and lifecycle transitions
+        activate_slam_handler,       # after SLAM activate, wait for /map
+        wait_for_map_handler,        # after /map available, reset odom or skip in sim
+        reset_odometry_handler,      # after reset odom, start Nav2 and wait for action
+        reset_odometry_skip_handler, # simulation path: start Nav2 and wait for action
+        wait_for_nav_action_handler, # after navigate_to_pose action available, start task manager and explore
     ])
