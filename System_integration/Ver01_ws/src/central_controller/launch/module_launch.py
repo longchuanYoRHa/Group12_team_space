@@ -3,7 +3,7 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, ExecuteProcess, RegisterEventHandler, LogInfo
 from launch.event_handlers import OnProcessExit
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, PythonExpression
+from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, PythonExpression, TextSubstitution
 from launch.conditions import IfCondition, UnlessCondition
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
@@ -31,11 +31,12 @@ def generate_launch_description():
         [FindPackageShare('custom_explore'), 'config', 'params.yaml']
     )
 
-    # Launch arguments
-    use_sim_time = LaunchConfiguration('use_sim_time', default='false')
+    # use_sim_time: true when no LiDAR (simulation), false when LiDAR present (real robot)
+    use_sim_time_str = 'true' if not lidar_connected else 'false'
+    use_sim_time = LaunchConfiguration('use_sim_time', default=use_sim_time_str)
     use_vision = LaunchConfiguration('use_vision', default='false')
     camera_frame_id = LaunchConfiguration('camera_frame_id', default='camera_link')
-    
+
     # Create condition variable
     lidar_connected_str = 'true' if lidar_connected else 'false'
     lidar_connected_config = LaunchConfiguration('lidar_connected', default=lidar_connected_str)
@@ -111,7 +112,7 @@ def generate_launch_description():
     )
 
     # Launch nav2_bringup navigation_launch.py
-    nav2_params_file = PathJoinSubstitution([controller_pkg_dir, 'config', 'nav2_params_radius.yaml'])
+    nav2_params_file = PathJoinSubstitution([controller_pkg_dir, 'config', 'nav2_params_smac2d_rpp.yaml'])
 
     nav2_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -281,8 +282,8 @@ def generate_launch_description():
         # Launch arguments
         DeclareLaunchArgument(
             'use_sim_time',
-            default_value='false',
-            description='Use simulation time if true'
+            default_value=TextSubstitution(text=use_sim_time_str),
+            description='Use simulation time if true (auto-detected from LiDAR connection by default)'
         ),
         
         DeclareLaunchArgument(
