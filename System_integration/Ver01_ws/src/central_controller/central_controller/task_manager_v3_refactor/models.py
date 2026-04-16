@@ -27,7 +27,6 @@ class TaskState(Enum):
     EXPLORE_FINISHED_FALLBACK = "explore_finished_fallback"
     RUN_MAP_DETECTION = "run_map_detection"
     NAV_TO_INTEREST_POINT = "nav_to_interest_point"
-    WAIT_AT_INTEREST_POINT = "wait_at_interest_point"
 
 
 class NavPurpose(Enum):
@@ -36,6 +35,7 @@ class NavPurpose(Enum):
     OBJECT_PREGRASP = "object_pregrasp"
     BIN_PREPLACE = "bin_preplace"
     INTEREST_POINT = "interest_point"
+    BACKUP_AFTER_ACTION = "backup_after_action"
 
 
 @dataclass(frozen=True)

@@ -512,12 +512,12 @@ docking_server:
     dock_prestaging_tolerance: 0.5
 
     # Types of docks
-    dock_plugins: ['simple_charging_dock']
-    simple_charging_dock:
-      plugin: 'opennav_docking::SimpleChargingDock'
+    dock_plugins: ['simple_non_charging_dock']
+    simple_non_charging_dock:
+      plugin: 'opennav_docking::SimpleNonChargingDock'
       docking_threshold: 0.05
       staging_x_offset: -0.7
-      # 使用 DockRobot action 直接传入的 dock_pose（视觉计算后的 20cm 停靠点）
+      # 使用 DockRobot action 直接传入的 dock_pose（视觉闭环计算后的目标停靠点）
       use_external_detection_pose: false
       use_battery_status: false # true
       use_stall_detection: false # true
