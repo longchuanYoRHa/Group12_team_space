@@ -19,6 +19,27 @@ from central_controller.task_manager_v3_refactor.models import (
 
 
 class TaskManagerNavigationMixin:
+    def _cache_missing_bins_as_home_pose_if_empty(self) -> bool:
+        if self.cached_bin_poses or self.home_pose is None:
+            return False
+
+        home_position = self.home_pose.pose.position
+        for color in ("red", "green", "blue"):
+            pose_stamped = geometry_msgs.PoseStamped()
+            pose_stamped.header.frame_id = "map"
+            pose_stamped.header.stamp = self.get_clock().now().to_msg()
+            pose_stamped.pose.position.x = home_position.x
+            pose_stamped.pose.position.y = home_position.y
+            pose_stamped.pose.position.z = home_position.z
+            pose_stamped.pose.orientation = self.home_pose.pose.orientation
+            self.cached_bin_poses[color] = pose_stamped
+
+        self.get_logger().warn(
+            "No bin detected during pre-explore spin; defaulting all cached bin poses "
+            "to the robot home pose."
+        )
+        return True
+
     def _build_camera_point_stamped(self, point_msg: geometry_msgs.Point):
         frame_id = str(self.get_parameter("camera_frame_id").value)
         point_stamped = geometry_msgs.PointStamped()
@@ -208,6 +229,7 @@ class TaskManagerNavigationMixin:
                 self.current_nav_purpose == NavPurpose.PRE_EXPLORE_NAV
                 and self.state == TaskState.PRE_EXPLORE_SPIN
             ):
+                self._cache_missing_bins_as_home_pose_if_empty()
                 self.get_logger().warn(
                     "PRE_EXPLORE_NAV rejected; starting exploration without pre-navigation."
                 )
@@ -231,6 +253,7 @@ class TaskManagerNavigationMixin:
         purpose = self.current_nav_purpose
 
         if purpose == NavPurpose.PRE_EXPLORE_NAV:
+            self._cache_missing_bins_as_home_pose_if_empty()
             keys = list(self.cached_bin_poses.keys())
             if self.state == TaskState.PRE_EXPLORE_SPIN:
                 if status == GoalStatus.STATUS_SUCCEEDED:
