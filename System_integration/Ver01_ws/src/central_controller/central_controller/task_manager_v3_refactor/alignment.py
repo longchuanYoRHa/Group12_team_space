@@ -240,18 +240,59 @@ class TaskManagerAlignmentMixin:
     def _start_backup_after_action(
         self, next_state: TaskState, explore_resume_after_restore
     ):
+        backup_dist = abs(float(self.get_parameter("backup_distance_m").value))
+        self._backup_end_time = None
+        self._backup_next_state = next_state
+        self._backup_after_restore_explore_resume = explore_resume_after_restore
+        self.state = TaskState.BACKUP_AFTER_ACTION
+
+        goal_pose = self._build_backward_nav_goal_in_frame(backup_dist, "map")
+        if goal_pose is None:
+            self.get_logger().warn(
+                "BACKUP_AFTER_ACTION: failed to build backup nav goal; "
+                "falling back to cmd_vel backup."
+            )
+            self._start_backup_cmd_vel_fallback()
+            return
+
+        self.get_logger().info(
+            "BACKUP_AFTER_ACTION: sending nav goal to current-heading rear point "
+            f"({goal_pose.pose.position.x:.3f}, {goal_pose.pose.position.y:.3f}) in map."
+        )
+        self._send_nav_goal(goal_pose, NavPurpose.BACKUP_AFTER_ACTION)
+
+    def _start_backup_cmd_vel_fallback(self):
         backup_dist = float(self.get_parameter("backup_distance_m").value)
         linear_speed = float(self.get_parameter("docking_linear_speed_mps").value)
         linear_speed = max(1e-4, abs(linear_speed))
         duration = backup_dist / linear_speed
 
         self._backup_end_time = time.monotonic() + duration
-        self._backup_next_state = next_state
-        self._backup_after_restore_explore_resume = explore_resume_after_restore
-        self.state = TaskState.BACKUP_AFTER_ACTION
         self.get_logger().info(
-            f"BACKUP_AFTER_ACTION: backing up {backup_dist:.2f} m for {duration:.1f} s."
+            f"BACKUP_AFTER_ACTION: cmd_vel fallback backing up {backup_dist:.2f} m "
+            f"for {duration:.1f} s."
         )
+
+    def _finish_backup_after_action(self):
+        self._stop_cmd_vel()
+        self._backup_end_time = None
+
+        next_state = self._backup_next_state
+        self._backup_next_state = None
+        self.state = next_state
+
+        if next_state == TaskState.RESUME_EXPLORE_FOR_BIN:
+            self._start_bin_search_or_go_to_cached()
+        elif next_state == TaskState.NAV_TO_INTEREST_POINT:
+            self._nav_to_next_interest_point()
+        elif next_state == TaskState.POST_ACTION:
+            self._handle_post_action()
+
+        if self._backup_after_restore_explore_resume is not None:
+            self._publish_explore_resume_if_changed(
+                bool(self._backup_after_restore_explore_resume)
+            )
+        self._backup_after_restore_explore_resume = None
 
     def _backup_control_step(self):
         if self._backup_end_time is None:
@@ -259,25 +300,7 @@ class TaskManagerAlignmentMixin:
 
         now = time.monotonic()
         if now >= self._backup_end_time:
-            self._stop_cmd_vel()
-            self._backup_end_time = None
-
-            next_state = self._backup_next_state
-            self._backup_next_state = None
-            self.state = next_state
-
-            if next_state == TaskState.RESUME_EXPLORE_FOR_BIN:
-                self._start_bin_search_or_go_to_cached()
-            elif next_state == TaskState.NAV_TO_INTEREST_POINT:
-                self._nav_to_next_interest_point()
-            elif next_state == TaskState.POST_ACTION:
-                self._handle_post_action()
-
-            if self._backup_after_restore_explore_resume is not None:
-                self._publish_explore_resume_if_changed(
-                    bool(self._backup_after_restore_explore_resume)
-                )
-            self._backup_after_restore_explore_resume = None
+            self._finish_backup_after_action()
             return
 
         linear_speed = float(self.get_parameter("docking_linear_speed_mps").value)

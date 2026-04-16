@@ -3,7 +3,6 @@ from __future__ import annotations
 import math
 import os
 import subprocess
-import time
 
 import geometry_msgs.msg as geometry_msgs
 import rclpy
@@ -148,7 +147,7 @@ class TaskManagerExplorationMixin:
             self._execute_grasp_with_current_object(msg, color)
             return
 
-        if self.state not in (TaskState.EXPLORE, TaskState.WAIT_AT_INTEREST_POINT):
+        if self.state != TaskState.EXPLORE:
             self.object_detection_count = 0
             return
 
@@ -169,27 +168,16 @@ class TaskManagerExplorationMixin:
                 self.state.name,
             )
 
-        if self.state == TaskState.EXPLORE:
-            self.get_logger().info(
-                f"Object found during EXPLORE, coords=({pose_stamped.pose.position.x:.2f}, "
-                f"{pose_stamped.pose.position.y:.2f}), stopping explore and docking directly."
-            )
-            self._publish_explore_resume_if_changed(False)
-            self._cancel_nav2_goal_if_any()
-            self._enter_precision_align(
-                NavPurpose.OBJECT_PREGRASP,
-                next_state_after_align=TaskState.GRASP,
-            )
-        else:
-            self.get_logger().info(
-                "Object found during WAIT_AT_INTEREST_POINT, "
-                f"coords=({pose_stamped.pose.position.x:.2f}, "
-                f"{pose_stamped.pose.position.y:.2f}), docking directly."
-            )
-            self._enter_precision_align(
-                NavPurpose.INTEREST_POINT,
-                next_state_after_align=TaskState.GRASP,
-            )
+        self.get_logger().info(
+            f"Object found during EXPLORE, coords=({pose_stamped.pose.position.x:.2f}, "
+            f"{pose_stamped.pose.position.y:.2f}), stopping explore and docking directly."
+        )
+        self._publish_explore_resume_if_changed(False)
+        self._cancel_nav2_goal_if_any()
+        self._enter_precision_align(
+            NavPurpose.OBJECT_PREGRASP,
+            next_state_after_align=TaskState.GRASP,
+        )
 
         self._handle_precision_align_vision(
             point_msg=msg,
@@ -257,7 +245,7 @@ class TaskManagerExplorationMixin:
             self.bin_detection_count = 0
             return
 
-        if self.state not in (TaskState.RESUME_EXPLORE_FOR_BIN, TaskState.WAIT_AT_INTEREST_POINT):
+        if self.state != TaskState.RESUME_EXPLORE_FOR_BIN:
             self.bin_detection_count = 0
             return
 
@@ -278,34 +266,18 @@ class TaskManagerExplorationMixin:
                 self.state.name,
             )
 
-        if self.state == TaskState.RESUME_EXPLORE_FOR_BIN:
-            self.get_logger().info(
-                f"Bin found during RESUME_EXPLORE_FOR_BIN, "
-                f"coords=({pose_stamped.pose.position.x:.2f}, "
-                f"{pose_stamped.pose.position.y:.2f}), stopping explore and nav to bin preplace."
-            )
-            self._publish_explore_resume_if_changed(False)
-            self._cancel_nav2_goal_if_any()
-        else:
-            self.get_logger().info(
-                "Bin found during WAIT_AT_INTEREST_POINT, "
-                f"coords=({pose_stamped.pose.position.x:.2f}, "
-                f"{pose_stamped.pose.position.y:.2f}), nav to bin preplace."
-            )
-
-        robot_x, robot_y = self._get_robot_xy_in_map()
-        preplace_distance = self.get_parameter("preplace_distance").value
-        goal_pose = compute_pregrasp_pose(
-            self.bin_pose,
-            preplace_distance,
-            robot_x,
-            robot_y,
-            frame_id="map",
-            stamp=self.get_clock().now().to_msg(),
-            yaw_offset=math.pi,
+        self.get_logger().info(
+            f"Bin found during RESUME_EXPLORE_FOR_BIN, "
+            f"coords=({pose_stamped.pose.position.x:.2f}, "
+            f"{pose_stamped.pose.position.y:.2f}), stopping explore and nav to bin preplace."
         )
-        self.state = TaskState.NAV_TO_BIN_PREPLACE
-        self._send_nav_goal(goal_pose, NavPurpose.BIN_PREPLACE)
+        self._publish_explore_resume_if_changed(False)
+        self._cancel_nav2_goal_if_any()
+        self._send_bin_preplace_goal(
+            pose_stamped,
+            color=color,
+            source="vision",
+        )
 
     def _bin_point_callback(self, msg: geometry_msgs.Point, color: str):
         self.dispatch(BinVisionEvent(color, msg))
@@ -322,6 +294,79 @@ class TaskManagerExplorationMixin:
         except Exception:
             return os.path.expanduser("~/maps")
 
+    def _terminate_task_manager(self, reason: str) -> None:
+        self.get_logger().error(reason)
+        self._publish_explore_resume_if_changed(False)
+        self._cancel_nav2_goal_if_any()
+        self._stop_cmd_vel()
+        if rclpy.ok():
+            rclpy.shutdown()
+
+    def _send_bin_preplace_goal(
+        self,
+        bin_pose: geometry_msgs.PoseStamped,
+        *,
+        color: str,
+        source: str,
+    ) -> None:
+        self.bin_pose = bin_pose
+        self._last_bin_map_color = color
+        robot_x, robot_y = self._get_robot_xy_in_map()
+        preplace_distance = self.get_parameter("preplace_distance").value
+        goal_pose = compute_pregrasp_pose(
+            self.bin_pose,
+            preplace_distance,
+            robot_x,
+            robot_y,
+            frame_id="map",
+            stamp=self.get_clock().now().to_msg(),
+            yaw_offset=math.pi,
+        )
+        self.get_logger().info(
+            f"Navigating to {source} bin [{color}] at "
+            f"({self.bin_pose.pose.position.x:.2f}, {self.bin_pose.pose.position.y:.2f}) "
+            "for place flow."
+        )
+        self.state = TaskState.NAV_TO_BIN_PREPLACE
+        self._send_nav_goal(goal_pose, NavPurpose.BIN_PREPLACE)
+
+    def _try_navigate_to_cached_bin(self) -> bool:
+        if not self.cached_bin_poses:
+            return False
+
+        robot_x, robot_y = self._get_robot_xy_in_map()
+        best_choice = None
+        best_dist_sq = None
+
+        for color, pose_stamped in self.cached_bin_poses.items():
+            position = pose_stamped.pose.position
+            if check_pose_in_blacklist(
+                position, self.bin_blacklist, self.blacklist_radius
+            ):
+                continue
+
+            dist_sq = (position.x - robot_x) ** 2 + (position.y - robot_y) ** 2
+            if best_dist_sq is None or dist_sq < best_dist_sq:
+                best_choice = (color, pose_stamped)
+                best_dist_sq = dist_sq
+
+        if best_choice is None:
+            return False
+
+        color, pose_stamped = best_choice
+        self._send_bin_preplace_goal(
+            pose_stamped,
+            color=color,
+            source="cached",
+        )
+        return True
+
+    def _start_explore_finished_fallback(self) -> None:
+        self.get_logger().info(
+            "Exploration finished, starting map fallback and interest point detection."
+        )
+        self._publish_explore_resume_if_changed(False)
+
     def _explore_finished_callback(self, msg: std_msgs.Bool):
         if not msg.data:
             return
@@ -329,13 +374,28 @@ class TaskManagerExplorationMixin:
         self.dispatch(ExploreFinishedEvent())
 
     def _handle_explore_finished_dispatch(self) -> None:
-        if self.state != TaskState.EXPLORE:
+        if self.cargo_state == CargoState.HAS_OBJECT:
+            if self.state == TaskState.RESUME_EXPLORE_FOR_BIN:
+                self.get_logger().info(
+                    "Exploration finished while carrying object; "
+                    "using cached bin pose before fallback."
+                )
+                self._publish_explore_resume_if_changed(False)
+                self._cancel_nav2_goal_if_any()
+                self.explore_done_flag = True
+                if self._try_navigate_to_cached_bin():
+                    return
+                self.get_logger().warn(
+                    "Exploration finished while carrying object, but no cached bin pose "
+                    "is available; entering fallback directly."
+                )
+            elif self.state != TaskState.EXPLORE:
+                return
+
+        if self.state != TaskState.EXPLORE and self.state != TaskState.RESUME_EXPLORE_FOR_BIN:
             return
 
-        self.get_logger().info(
-            "Exploration finished, starting map fallback and interest point detection."
-        )
-        self._publish_explore_resume_if_changed(False)
+        self._start_explore_finished_fallback()
 
         maps_dir = self._get_maps_directory()
         os.makedirs(maps_dir, exist_ok=True)
@@ -349,30 +409,37 @@ class TaskManagerExplorationMixin:
                 text=True,
             )
             if proc.returncode != 0:
-                self.get_logger().warn(
-                    f"map_saver_cli returncode={proc.returncode}; "
+                self._terminate_task_manager(
+                    f"Fallback aborted: map_saver_cli returncode={proc.returncode}; "
                     f"stderr: {proc.stderr.strip() or '(none)'}"
                 )
+                return
         except subprocess.TimeoutExpired:
-            self.get_logger().warn("map_saver_cli timed out after 15s.")
+            self._terminate_task_manager(
+                "Fallback aborted: map_saver_cli timed out after 15s."
+            )
+            return
         except FileNotFoundError:
-            self.get_logger().error("ros2 or map_saver_cli not found in PATH.")
+            self._terminate_task_manager(
+                "Fallback aborted: ros2 or map_saver_cli not found in PATH."
+            )
+            return
         except Exception as exc:
-            self.get_logger().warn(f"map_saver_cli error: {exc}")
+            self._terminate_task_manager(f"Fallback aborted: map_saver_cli error: {exc}")
+            return
 
         pgm_path = os.path.join(maps_dir, basename + ".pgm")
         if not os.path.isfile(pgm_path):
-            self.get_logger().error(
-                f"PGM not found at {pgm_path}; cannot run interest point detection."
+            self._terminate_task_manager(
+                f"Fallback aborted: PGM not found at {pgm_path}; "
+                "cannot run interest point detection."
             )
             return
 
         try:
             raw_points = get_interest_points_from_pgm(pgm_path, prefer_yaml=True)
         except Exception as exc:
-            self.get_logger().error(f"PGM detection failed: {exc}; returning to EXPLORE.")
-            self.state = TaskState.EXPLORE
-            self._publish_explore_resume_if_changed(True)
+            self._terminate_task_manager(f"Fallback aborted: PGM detection failed: {exc}")
             return
 
         if self._map_coords_csv:
@@ -402,8 +469,8 @@ class TaskManagerExplorationMixin:
         )
 
         if not self.interest_points:
-            self.get_logger().info(
-                "No interest points left; exploration finished with no fallback targets."
+            self._terminate_task_manager(
+                "Fallback finished immediately: no interest points left after filtering."
             )
             return
 
@@ -413,7 +480,9 @@ class TaskManagerExplorationMixin:
 
     def _nav_to_next_interest_point(self):
         if self.interest_point_index >= len(self.interest_points):
-            self.get_logger().info("All interest points visited; no more fallback targets.")
+            self._terminate_task_manager(
+                "Fallback completed: all interest points visited; no more targets."
+            )
             return
 
         map_x, map_y = self.interest_points[self.interest_point_index]
@@ -444,33 +513,22 @@ class TaskManagerExplorationMixin:
         )
         self._send_nav_goal(goal_pose, NavPurpose.INTEREST_POINT)
 
-    def _handle_wait_at_interest_point_timeout(self):
-        duration = self.get_parameter("wait_at_interest_point_sec").value
-        if self.wait_at_point_start_time is None:
-            self.wait_at_point_start_time = time.monotonic()
-            return
-
-        elapsed = time.monotonic() - self.wait_at_point_start_time
-        if elapsed < duration:
-            return
-
-        if self.current_interest_point is not None:
-            point = geometry_msgs.Point()
-            point.x = self.current_interest_point[0]
-            point.y = self.current_interest_point[1]
-            point.z = 0.0
-            self.object_blacklist.append(point)
-            self.get_logger().info(
-                "No vision detection at interest point within timeout; marked as failed target."
-            )
-
-        self.interest_point_index += 1
-        self.current_interest_point = None
-        self.wait_at_point_start_time = None
-        self.state = TaskState.NAV_TO_INTEREST_POINT
-        self._nav_to_next_interest_point()
-
     def _start_bin_search_or_go_to_cached(self):
+        if self.explore_finished_received and self.cargo_state == CargoState.HAS_OBJECT:
+            self.get_logger().info(
+                "Exploration already finished while carrying object; "
+                "switching to cached bin delivery/fallback."
+            )
+            self._backup_after_restore_explore_resume = None
+            self.explore_done_flag = True
+            if self._try_navigate_to_cached_bin():
+                return
+            self.get_logger().warn(
+                "No cached bin pose available after exploration finished; "
+                "starting fallback directly."
+            )
+            self._handle_explore_finished_dispatch()
+            return
         self._publish_explore_resume_if_changed(True)
 
     def _handle_post_action(self):

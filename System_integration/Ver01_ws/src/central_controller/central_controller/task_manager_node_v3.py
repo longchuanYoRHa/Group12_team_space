@@ -311,8 +311,6 @@ class TaskManagerNodeV3(
             self._handle_precision_align_timeout_if_needed()
         elif self.state == TaskState.BACKUP_AFTER_ACTION:
             self._backup_control_step()
-        elif self.state == TaskState.WAIT_AT_INTEREST_POINT:
-            self._handle_wait_at_interest_point_timeout()
 
     def _state_timer_callback(self) -> None:
         self.dispatch(TickEvent())

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+
 import rclpy
 from action_msgs.msg import GoalStatus
 import geometry_msgs.msg as geometry_msgs
@@ -7,6 +9,7 @@ import nav2_msgs.action as nav2_msgs
 import std_msgs.msg as std_msgs
 import tf2_geometry_msgs
 
+from central_controller.task_manager_utils import quat_yaw
 from central_controller.task_manager_v3_refactor.models import (
     Nav2GoalResponseEvent,
     Nav2ResultEvent,
@@ -143,6 +146,34 @@ class TaskManagerNavigationMixin:
         except Exception:
             return (0.0, 0.0)
 
+    def _build_backward_nav_goal_in_frame(self, distance_m: float, target_frame: str):
+        try:
+            transform = self.tf_buffer.lookup_transform(
+                target_frame,
+                "base_link",
+                rclpy.time.Time(),
+                timeout=rclpy.duration.Duration(seconds=0.5),
+            )
+        except Exception as exc:
+            self.get_logger().error(
+                f"Failed to get robot pose in {target_frame} for backup nav goal: {exc}"
+            )
+            return None
+
+        yaw = quat_yaw(transform.transform.rotation)
+        goal_pose = geometry_msgs.PoseStamped()
+        goal_pose.header.frame_id = target_frame
+        goal_pose.header.stamp = self.get_clock().now().to_msg()
+        goal_pose.pose.position.x = (
+            transform.transform.translation.x - distance_m * math.cos(yaw)
+        )
+        goal_pose.pose.position.y = (
+            transform.transform.translation.y - distance_m * math.sin(yaw)
+        )
+        goal_pose.pose.position.z = transform.transform.translation.z
+        goal_pose.pose.orientation = transform.transform.rotation
+        return goal_pose
+
     def _cancel_nav2_goal_if_any(self):
         if self.nav2_goal_handle is not None:
             self.nav2_client.cancel_goal_async(self.nav2_goal_handle)
@@ -165,6 +196,14 @@ class TaskManagerNavigationMixin:
         goal_handle = future.result()
         if not goal_handle.accepted:
             self.get_logger().error("Nav2 goal rejected!")
+            if self.current_nav_purpose == NavPurpose.BACKUP_AFTER_ACTION:
+                self.get_logger().warn(
+                    "BACKUP_AFTER_ACTION nav goal rejected; falling back to cmd_vel backup."
+                )
+                self._start_backup_cmd_vel_fallback()
+                self.nav2_goal_handle = None
+                self.current_nav_purpose = NavPurpose.NONE
+                return
             if (
                 self.current_nav_purpose == NavPurpose.PRE_EXPLORE_NAV
                 and self.state == TaskState.PRE_EXPLORE_SPIN
@@ -206,6 +245,30 @@ class TaskManagerNavigationMixin:
                     )
                 self.state = TaskState.EXPLORE
                 self._publish_explore_resume_if_changed(True)
+            self.nav2_goal_handle = None
+            self.current_nav_purpose = NavPurpose.NONE
+            return
+
+        if purpose == NavPurpose.BACKUP_AFTER_ACTION:
+            if status == GoalStatus.STATUS_SUCCEEDED:
+                self.get_logger().info("Nav2 goal succeeded (backup_after_action)")
+                self._finish_backup_after_action()
+            elif status == GoalStatus.STATUS_ABORTED:
+                self.get_logger().warn(
+                    "Nav2 goal aborted (backup_after_action); falling back to cmd_vel backup."
+                )
+                self._start_backup_cmd_vel_fallback()
+            elif status == GoalStatus.STATUS_CANCELED:
+                self.get_logger().info(
+                    "Nav2 goal canceled (backup_after_action); falling back to cmd_vel backup."
+                )
+                self._start_backup_cmd_vel_fallback()
+            else:
+                self.get_logger().warn(
+                    f"Nav2 goal finished with status={status} (backup_after_action); "
+                    "falling back to cmd_vel backup."
+                )
+                self._start_backup_cmd_vel_fallback()
             self.nav2_goal_handle = None
             self.current_nav_purpose = NavPurpose.NONE
             return
