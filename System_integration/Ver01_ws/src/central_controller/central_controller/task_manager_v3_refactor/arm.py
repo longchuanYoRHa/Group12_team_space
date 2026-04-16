@@ -7,6 +7,13 @@ from central_controller.task_manager_v3_refactor.models import CargoState, TaskS
 
 
 class TaskManagerArmMixin:
+    def _copy_point(self, source: geometry_msgs.Point):
+        target = geometry_msgs.Point()
+        target.x = source.x
+        target.y = source.y
+        target.z = source.z
+        return target
+
     def _arm_status_callback(self, msg: std_msgs.String):
         self.arm_status = msg.data.lower()
 
@@ -88,10 +95,7 @@ class TaskManagerArmMixin:
     ):
         if self._arm_cmd_sent:
             return
-        target_pt = self._point_camera_to_base_link_mm(point_msg)
-        if target_pt is None:
-            self.get_logger().warn("Grasp: camera->base_link failed, skipping this cycle")
-            return
+        target_pt = self._copy_point(point_msg)
         if self._map_coords_csv:
             mx = my = None
             if self.object_pose is not None:
@@ -100,31 +104,41 @@ class TaskManagerArmMixin:
             self._map_coords_csv.log_object_pick_arm(
                 color, point_msg.x, point_msg.y, point_msg.z, mx, my
             )
-        self.get_logger().info("Sending pick target to manipulator (/arm/target_pick)...")
+        self.get_logger().info(
+            "Sending pick target to manipulator (/arm/target_pick) "
+            f"in {self.get_parameter('camera_frame_id').value} frame."
+        )
         self.arm_pick_pub.publish(target_pt)
         self._arm_cmd_sent = True
 
     def _execute_place_with_current_bin(self):
-        if self.bin_pose is None:
-            self.get_logger().error("PLACE_IN_BIN state but bin_pose is None!")
-            return
         if self._arm_cmd_sent:
             return
-
-        target_pt = self._get_point_in_base_link_mm(self.bin_pose)
-        if target_pt is None:
-            self.get_logger().warn("Place: cannot get target in base_link, skipping this cycle")
+        if self._last_bin_vision_xyz is None:
+            self.get_logger().warn(
+                "Place: no cached camera-frame bin point, skipping this cycle"
+            )
             return
+        target_pt = geometry_msgs.Point()
+        target_pt.x, target_pt.y, target_pt.z = self._last_bin_vision_xyz
 
         if self._map_coords_csv:
-            position = self.bin_pose.pose.position
+            position = None if self.bin_pose is None else self.bin_pose.pose.position
             vx = vy = vz = None
             if self._last_bin_vision_xyz is not None:
                 vx, vy, vz = self._last_bin_vision_xyz
             self._map_coords_csv.log_bin_map_place_command(
-                self._last_bin_map_color, vx, vy, vz, position.x, position.y
+                self._last_bin_map_color,
+                vx,
+                vy,
+                vz,
+                None if position is None else position.x,
+                None if position is None else position.y,
             )
 
-        self.get_logger().info("Sending place target to manipulator (/arm/target_place)...")
+        self.get_logger().info(
+            "Sending place target to manipulator (/arm/target_place) "
+            f"in {self.get_parameter('camera_frame_id').value} frame."
+        )
         self.arm_place_pub.publish(target_pt)
         self._arm_cmd_sent = True
