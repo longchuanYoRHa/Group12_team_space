@@ -196,6 +196,7 @@ behavior_server:
     cycle_frequency: 10.0
     behavior_plugins:
     - spin
+    - backup
     - drive_on_heading
     - assisted_teleop
     - wait
