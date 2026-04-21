@@ -434,7 +434,16 @@ class TaskManagerExplorationMixin:
             return
 
         try:
-            raw_points = get_interest_points_from_pgm(pgm_path, prefer_yaml=True)
+            raw_points = get_interest_points_from_pgm(
+                pgm_path,
+                prefer_yaml=True,
+                max_bbox_extent_m=float(
+                    self.get_parameter("interest_point_max_bbox_m").value
+                ),
+                dedupe_min_separation_px=float(
+                    self.get_parameter("interest_point_dedupe_min_separation_px").value
+                ),
+            )
         except Exception as exc:
             self._terminate_task_manager(f"Fallback aborted: PGM detection failed: {exc}")
             return
@@ -494,10 +503,10 @@ class TaskManagerExplorationMixin:
         target_pose.pose.orientation.w = 1.0
 
         robot_x, robot_y = self._get_robot_xy_in_map()
-        pregrasp_distance = self.get_parameter("pregrasp_distance").value
+        standoff_m = float(self.get_parameter("interest_point_standoff_m").value)
         goal_pose = compute_pregrasp_pose(
             target_pose,
-            pregrasp_distance,
+            standoff_m,
             robot_x,
             robot_y,
             frame_id="map",
@@ -506,7 +515,7 @@ class TaskManagerExplorationMixin:
 
         self.get_logger().info(
             f"Nav to interest point {self.interest_point_index + 1}/{len(self.interest_points)} "
-            f"at ({map_x:.2f}, {map_y:.2f})"
+            f"POI=({map_x:.2f}, {map_y:.2f}) standoff={standoff_m:.2f} m (goal on line toward robot, facing POI)"
         )
         self._send_nav_goal(goal_pose, NavPurpose.INTEREST_POINT)
 
