@@ -150,7 +150,7 @@ def generate_launch_description():
 
     task_manager_node = Node(
         package='central_controller',
-        executable='task_manager_v3',
+        executable='task_manager_v4',
         name='task_manager',
         output='screen',
         parameters=[{

@@ -208,7 +208,7 @@ class TaskManagerNodeV4(
         self.declare_parameter("map_origin_y", DEFAULT_ORIGIN[1])
         self.declare_parameter("wait_at_interest_point_sec", 15.0)
 
-        self.declare_parameter("docking_linear_speed_mps", 0.005)
+        self.declare_parameter("docking_linear_speed_mps", 0.01)
         self.declare_parameter("docking_angular_speed_max_rps", 0.25)
         self.declare_parameter("docking_stop_distance_m", 0.265)
 
