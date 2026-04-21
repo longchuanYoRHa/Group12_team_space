@@ -199,7 +199,7 @@ class TaskManagerNodeV4(
 
     def _declare_parameters(self) -> None:
         self.declare_parameter("pregrasp_distance", 0.5)
-        self.declare_parameter("interest_point_standoff_m", 0.42)
+        self.declare_parameter("interest_point_standoff_m", 0.30)
         self.declare_parameter("interest_point_max_bbox_m", 0.30)
         self.declare_parameter("interest_point_dedupe_min_separation_px", 4.0)
         self.declare_parameter("preplace_distance", 0.6)
