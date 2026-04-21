@@ -10,7 +10,7 @@ import std_msgs.msg as std_msgs
 import tf2_geometry_msgs
 
 from central_controller.task_manager_utils import quat_yaw
-from central_controller.task_manager_v3_refactor.models import (
+from central_controller.task_manager_v4_refactor.models import (
     Nav2GoalResponseEvent,
     Nav2ResultEvent,
     NavPurpose,
@@ -330,3 +330,4 @@ class TaskManagerNavigationMixin:
 
         self.nav2_goal_handle = None
         self.current_nav_purpose = NavPurpose.NONE
+

@@ -15,7 +15,7 @@ from central_controller.task_manager_utils import (
     is_pose_in_blacklist as check_pose_in_blacklist,
     quaternion_from_yaw,
 )
-from central_controller.task_manager_v3_refactor.models import (
+from central_controller.task_manager_v4_refactor.models import (
     BinVisionEvent,
     CargoState,
     ExploreFinishedEvent,
@@ -554,3 +554,4 @@ class TaskManagerExplorationMixin:
         self.get_logger().info("Post action: returning to explore")
         self.state = TaskState.EXPLORE
         self._publish_explore_resume_if_changed(True)
+

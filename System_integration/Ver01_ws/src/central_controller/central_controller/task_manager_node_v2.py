@@ -234,6 +234,9 @@ class TaskManagerNodeV2(Node):
 
         # ========== 参数 ==========
         self.declare_parameter('pregrasp_distance', 0.26)
+        self.declare_parameter('interest_point_standoff_m', 0.42)
+        self.declare_parameter('interest_point_max_bbox_m', 0.30)
+        self.declare_parameter('interest_point_dedupe_min_separation_px', 4.0)
         self.declare_parameter('preplace_distance', 0.26)
         self.declare_parameter('camera_frame_id', 'D435i_camera_link') # change to 'D435i_camera_link' for simulation
         self.declare_parameter('maps_directory', '')
@@ -1048,8 +1051,13 @@ class TaskManagerNodeV2(Node):
         try:
             raw_points = get_interest_points_from_pgm(
                 pgm_path,
-                # 自动读取同名 yaml 的 origin/resolution（PGM 不包含原点信息）
                 prefer_yaml=True,
+                max_bbox_extent_m=float(
+                    self.get_parameter('interest_point_max_bbox_m').value
+                ),
+                dedupe_min_separation_px=float(
+                    self.get_parameter('interest_point_dedupe_min_separation_px').value
+                ),
             )
         except Exception as e:
             self.get_logger().error(f'PGM detection failed: {e}; returning to EXPLORE.')
@@ -1109,15 +1117,15 @@ class TaskManagerNodeV2(Node):
         target_pose.pose.orientation.w = 1.0
 
         robot_x, robot_y = self._get_robot_xy_in_map()
-        pregrasp_distance = self.get_parameter('pregrasp_distance').value
+        standoff_m = float(self.get_parameter('interest_point_standoff_m').value)
         goal_pose = compute_pregrasp_pose(
-            target_pose, pregrasp_distance, robot_x, robot_y,
+            target_pose, standoff_m, robot_x, robot_y,
             frame_id='map', stamp=self.get_clock().now().to_msg(),
         )
 
         self.get_logger().info(
             f'Nav to interest point {self.interest_point_index + 1}/{len(self.interest_points)} '
-            f'at ({mx:.2f}, {my:.2f})'
+            f'POI=({mx:.2f}, {my:.2f}) standoff={standoff_m:.2f} m'
         )
         self._send_nav_goal(goal_pose, NavPurpose.INTEREST_POINT)
 

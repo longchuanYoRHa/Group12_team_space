@@ -299,6 +299,35 @@ private:
     return frontier_blacklist_.end();
   }
 
+  std::vector<geometry_msgs::msg::Point>::iterator findCompletedGoal(
+      const geometry_msgs::msg::Point& goal)
+  {
+    constexpr static size_t tolerance_cells = 5;
+    auto* costmap2d = costmap_client_.getCostmap();
+    const double tol = static_cast<double>(tolerance_cells) * costmap2d->getResolution();
+    for (auto it = completed_goals_.begin(); it != completed_goals_.end(); ++it) {
+      const double x_diff = std::fabs(goal.x - it->x);
+      const double y_diff = std::fabs(goal.y - it->y);
+      if (x_diff < tol && y_diff < tol) {
+        return it;
+      }
+    }
+    return completed_goals_.end();
+  }
+
+  bool goalCompleted(const geometry_msgs::msg::Point& goal)
+  {
+    return findCompletedGoal(goal) != completed_goals_.end();
+  }
+
+  void markGoalCompleted(const geometry_msgs::msg::Point& goal)
+  {
+    if (goalCompleted(goal)) {
+      return;
+    }
+    completed_goals_.push_back(goal);
+  }
+
   void bumpAbortFailure(const geometry_msgs::msg::Point& p)
   {
     auto it = findBlacklistEntry(p);
@@ -373,14 +402,15 @@ private:
       visualizeFrontiers(frontiers);
     }
 
-    // find non blacklisted frontier
+    // find a frontier that is neither blacklisted nor already completed
     auto frontier = std::find_if_not(
         frontiers.begin(), frontiers.end(),
         [this](const frontier_exploration::Frontier& f) {
-          return goalOnBlacklist(f.centroid);
+          return goalOnBlacklist(f.centroid) || goalCompleted(f.centroid);
         });
     if (frontier == frontiers.end()) {
-      RCLCPP_WARN(logger_, "All frontiers traversed/tried out, stopping.");
+      RCLCPP_WARN(logger_,
+                  "All frontiers are blacklisted or already completed, stopping.");
       stop(true);
       return;
     }
@@ -440,6 +470,7 @@ private:
     switch (result.code) {
       case rclcpp_action::ResultCode::SUCCEEDED:
         RCLCPP_DEBUG(logger_, "Goal was successful");
+        markGoalCompleted(frontier_goal);
         break;
       case rclcpp_action::ResultCode::ABORTED:
         RCLCPP_DEBUG(logger_, "Goal was aborted");
@@ -537,6 +568,7 @@ private:
       marker_array_publisher_;
 
   std::vector<FrontierBlacklistEntry> frontier_blacklist_;
+  std::vector<geometry_msgs::msg::Point> completed_goals_;
   geometry_msgs::msg::Point current_nav_target_;
   bool nav_goal_in_flight_{false};
   uint64_t nav_goal_generation_{0};

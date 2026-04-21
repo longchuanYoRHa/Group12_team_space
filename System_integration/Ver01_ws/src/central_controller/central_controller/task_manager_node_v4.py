@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 """
-Task manager state machine node V3.
+Task manager state machine node V4.
 
-在保留原有 ROS 话题、动作与状态机行为的前提下，将主节点拆分为：
-- `task_manager_v3_refactor.models`：状态枚举与事件模型
-- `task_manager_v3_refactor.navigation`：TF / Nav2 相关逻辑
-- `task_manager_v3_refactor.arm`：机械臂回调与抓放执行
-- `task_manager_v3_refactor.alignment`：精确对位、后退恢复
-- `task_manager_v3_refactor.exploration`：探索、视觉触发、地图回退
+约束：
+- 不修改 `task_manager_node_v3.py` 与 `task_manager_v3_refactor/`
+- 基于 v3 refactor 结构复制出 v4 refactor
 
-主节点只负责装配 ROS 接口、维护共享运行时状态与统一事件分发。
+改进点（相对 V3）：
+- 识别到 object 后的 PRECISION_ALIGN 对位改为纯视觉引导：
+  - 使用 camera frame 下的 x 偏移量控制角速度（差速转向）
+  - 使用 z 与 0.265（参数 grasp_target_camera_z_m）做差控制线速度
+  - 达到容差后直接进入 GRASP（与 v2 “达标即抓取” 的切换方式一致）
 """
 
 import os
@@ -26,16 +27,16 @@ from std_srvs.srv import Trigger
 
 from central_controller.detect_objects_in_pgm_map import DEFAULT_ORIGIN, DEFAULT_RESOLUTION
 from central_controller.detection_map_coordinates_csv import DetectionMapCoordinatesCsvLogger
-from central_controller.task_manager_v3_refactor.alignment import TaskManagerAlignmentMixin
-from central_controller.task_manager_v3_refactor.arm import TaskManagerArmMixin
-from central_controller.task_manager_v3_refactor.docking import (
+from central_controller.task_manager_v4_refactor.alignment import TaskManagerAlignmentMixin
+from central_controller.task_manager_v4_refactor.arm import TaskManagerArmMixin
+from central_controller.task_manager_v4_refactor.docking import (
     DOCKROBOT_IMPORT_ERROR,
     DockRobot,
 )
-from central_controller.task_manager_v3_refactor.exploration import (
+from central_controller.task_manager_v4_refactor.exploration import (
     TaskManagerExplorationMixin,
 )
-from central_controller.task_manager_v3_refactor.models import (
+from central_controller.task_manager_v4_refactor.models import (
     BinVisionEvent,
     CargoState,
     ExploreFinishedEvent,
@@ -47,12 +48,12 @@ from central_controller.task_manager_v3_refactor.models import (
     TaskState,
     TickEvent,
 )
-from central_controller.task_manager_v3_refactor.navigation import (
+from central_controller.task_manager_v4_refactor.navigation import (
     TaskManagerNavigationMixin,
 )
 
 
-class TaskManagerNodeV3(
+class TaskManagerNodeV4(
     TaskManagerExplorationMixin,
     TaskManagerAlignmentMixin,
     TaskManagerArmMixin,
@@ -60,7 +61,7 @@ class TaskManagerNodeV3(
     Node,
 ):
     def __init__(self):
-        super().__init__("task_manager_v3")
+        super().__init__("task_manager_v4")
         self._init_runtime_state()
         self._setup_action_clients()
         self._setup_publishers()
@@ -70,7 +71,7 @@ class TaskManagerNodeV3(
         self._setup_services()
         self._setup_csv_logger()
         self._setup_precision_align_state()
-        self.get_logger().info("Task manager V3 node initialized")
+        self.get_logger().info("Task manager V4 node initialized")
 
     def _init_runtime_state(self) -> None:
         self.state = TaskState.INIT
@@ -142,9 +143,7 @@ class TaskManagerNodeV3(
         self._dock_result_future = None
 
     def _setup_publishers(self) -> None:
-        self.explore_control_pub = self.create_publisher(
-            std_msgs.Bool, "explore/resume", 10
-        )
+        self.explore_control_pub = self.create_publisher(std_msgs.Bool, "explore/resume", 10)
         self.state_pub = self.create_publisher(std_msgs.String, "task_manager/state", 10)
         self.cargo_state_pub = self.create_publisher(
             std_msgs.String, "task_manager/cargo_state", 10
@@ -200,7 +199,7 @@ class TaskManagerNodeV3(
 
     def _declare_parameters(self) -> None:
         self.declare_parameter("pregrasp_distance", 0.5)
-        self.declare_parameter("interest_point_standoff_m", 0.42)
+        self.declare_parameter("interest_point_standoff_m", 0.30)
         self.declare_parameter("interest_point_max_bbox_m", 0.30)
         self.declare_parameter("interest_point_dedupe_min_separation_px", 4.0)
         self.declare_parameter("preplace_distance", 0.6)
@@ -211,13 +210,20 @@ class TaskManagerNodeV3(
         self.declare_parameter("map_origin_x", DEFAULT_ORIGIN[0])
         self.declare_parameter("map_origin_y", DEFAULT_ORIGIN[1])
         self.declare_parameter("wait_at_interest_point_sec", 15.0)
-        self.declare_parameter("docking_linear_speed_mps", 0.005)
+
+        self.declare_parameter("docking_linear_speed_mps", 0.01)
         self.declare_parameter("docking_angular_speed_max_rps", 0.25)
-        self.declare_parameter("docking_yaw_kp", 1.5)
-        self.declare_parameter("docking_y_tolerance_m", 0.01)
         self.declare_parameter("docking_stop_distance_m", 0.265)
+
+        # Visual docking (object)
+        self.declare_parameter("visual_docking_x_kp", 1.5)
+        self.declare_parameter("visual_docking_z_kp", 1.0)
+        self.declare_parameter("visual_docking_x_tolerance_m", 0.05)
+
+        # Grasp decision threshold (distance in camera z)
         self.declare_parameter("grasp_target_camera_z_m", 0.265)
         self.declare_parameter("grasp_target_camera_z_tolerance_m", 0.01)
+
         self.declare_parameter("backup_distance_m", 0.20)
         self.declare_parameter("pre_explore_spin_enable", True)
         self.declare_parameter("pre_explore_nav_offset_x_m", 0.3)
@@ -243,26 +249,25 @@ class TaskManagerNodeV3(
 
         csv_path = self.get_parameter("detection_map_coordinates_csv_path").value
         if not csv_path:
-            csv_path = os.path.join(
-                self._get_maps_directory(), "detection_map_coordinates.csv"
-            )
+            csv_path = os.path.join(self._get_maps_directory(), "detection_map_coordinates.csv")
 
         try:
             self._map_coords_csv = DetectionMapCoordinatesCsvLogger(csv_path)
             self.get_logger().info(f"Detection map coordinates CSV: {csv_path}")
         except OSError as exc:
-            self.get_logger().warn(
-                f"Could not open detection map CSV ({csv_path}): {exc}"
-            )
+            self.get_logger().warn(f"Could not open detection map CSV ({csv_path}): {exc}")
 
     def _setup_precision_align_state(self) -> None:
         self._precision_align_source_purpose = NavPurpose.NONE
         self._precision_align_next_state = None
-        self._docking_active = False
-        self._docking_phase = "rotate"
-        self._last_docking_target_base_m = None
         self._dock_goal_sent = False
-        self._precision_align_waiting_for_object_z_check = False
+        self._dock_goal_handle = None
+        self._dock_result_future = None
+
+        self._visual_docking_active = False
+        self._visual_docking_last_point = None
+        self._visual_docking_start_time = None
+
         self._backup_end_time = None
         self._backup_next_state = None
         self._backup_after_restore_explore_resume = None
@@ -319,13 +324,9 @@ class TaskManagerNodeV3(
         self.dispatch(TickEvent())
 
 
-# 兼容旧命名，避免外部代码仍引用 `TaskManagerNodeV2` 时直接失效。
-TaskManagerNodeV2 = TaskManagerNodeV3
-
-
 def main(args=None):
     rclpy.init(args=args)
-    node = TaskManagerNodeV3()
+    node = TaskManagerNodeV4()
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
@@ -337,3 +338,4 @@ def main(args=None):
 
 if __name__ == "__main__":
     main()
+

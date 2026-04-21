@@ -39,7 +39,7 @@ controller_server:
     general_goal_checker:
       stateful: true
       plugin: nav2_controller::SimpleGoalChecker
-      xy_goal_tolerance: 0.22
+      xy_goal_tolerance: 0.20
       yaw_goal_tolerance: 0.15
     FollowPath:
       plugin: nav2_regulated_pure_pursuit_controller::RegulatedPurePursuitController
@@ -86,7 +86,7 @@ local_costmap:
       inflation_layer:
         plugin: nav2_costmap_2d::InflationLayer
         cost_scaling_factor: 9.0
-        inflation_radius: 0.322
+        inflation_radius: 0.50
       voxel_layer:
         plugin: nav2_costmap_2d::VoxelLayer
         enabled: true
@@ -215,7 +215,7 @@ behavior_server:
     robot_base_frame: base_link
     transform_tolerance: 0.1
     simulate_ahead_time: 2.0
-    max_rotational_vel: 0.34906585
+    max_rotational_vel: 0.10
     min_rotational_vel: 0.06
     rotational_acc_lim: 1.2
 waypoint_follower:
@@ -326,7 +326,7 @@ docking_server:
     - simple_non_charging_dock
     simple_non_charging_dock:
       plugin: opennav_docking::SimpleNonChargingDock
-      docking_threshold: 0.05
+      docking_threshold: 0.001
       staging_x_offset: -0.7
       use_external_detection_pose: false
       use_battery_status: false

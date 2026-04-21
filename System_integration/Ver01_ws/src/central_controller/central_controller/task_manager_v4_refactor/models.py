@@ -77,3 +77,4 @@ TaskEvent = Union[
     Nav2GoalResponseEvent,
     Nav2ResultEvent,
 ]
+

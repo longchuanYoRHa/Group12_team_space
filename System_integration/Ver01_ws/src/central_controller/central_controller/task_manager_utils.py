@@ -67,9 +67,11 @@ def compute_pregrasp_pose(target_pose, distance, robot_x, robot_y,
     """
     Compute pregrasp/preplace pose.
 
-    Generate a pose in front of target at given distance, facing target
-    (yaw from goal toward target), plus optional yaw_offset (e.g. math.pi
-    to flip heading 180° for vision-triggered goals).
+    Generate a pose on the line from target toward the robot, at ``distance``
+    meters from the target (standoff). Orientation faces the target
+    (yaw from goal toward target). Used for pregrasp/preplace and for
+    interest-point approach (target = map POI, distance ≈ 0.42 m).
+    Optional yaw_offset (e.g. math.pi) flips heading 180° for vision goals.
 
     Args:
         target_pose: geometry_msgs.msg.PoseStamped, target pose (map frame)
