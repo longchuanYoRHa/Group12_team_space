@@ -34,8 +34,8 @@ class TaskManagerAlignmentMixin:
         stop_dist: float | None = None,
         robot_delta: float | None = None,
     ):
-        cube_pose_odom = self._point_to_pose_stamped_in_frame(point_msg, "odom")
-        robot_x, robot_y = self._get_robot_xy_in_frame("odom")
+        cube_pose_odom = self._point_to_pose_stamped_in_frame(point_msg, "map")
+        robot_x, robot_y = self._get_robot_xy_in_frame("map")
         cx = cube_pose_odom.pose.position.x
         cy = cube_pose_odom.pose.position.y
         dx = cx - robot_x
@@ -56,7 +56,7 @@ class TaskManagerAlignmentMixin:
             ty = cy - uy * stop_dist
 
         target_pose = geometry_msgs.PoseStamped()
-        target_pose.header.frame_id = "odom"
+        target_pose.header.frame_id = "map"
         target_pose.header.stamp = self.get_clock().now().to_msg()
         target_pose.pose.position.x = tx
         target_pose.pose.position.y = ty
@@ -68,7 +68,7 @@ class TaskManagerAlignmentMixin:
         self.get_logger().info(
             "PRECISION_ALIGN: sending DockRobot goal "
             f"({log_reason}, target=({target_pose.pose.position.x:.3f},"
-            f"{target_pose.pose.position.y:.3f}) odom)."
+            f"{target_pose.pose.position.y:.3f}) map)."
         )
 
         goal = DockRobot.Goal()
