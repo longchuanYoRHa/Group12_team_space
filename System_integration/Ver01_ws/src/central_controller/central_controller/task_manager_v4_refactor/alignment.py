@@ -243,7 +243,7 @@ class TaskManagerAlignmentMixin:
         kp_x = float(self.get_parameter("visual_docking_x_kp").value)
         kp_z = float(self.get_parameter("visual_docking_z_kp").value)
 
-        x_error = float(point.x)
+        x_error = -float(point.x)
         z_error = float(point.z) - target_z
 
         aligned = (abs(x_error) <= x_tol) and (abs(z_error) <= z_tol)

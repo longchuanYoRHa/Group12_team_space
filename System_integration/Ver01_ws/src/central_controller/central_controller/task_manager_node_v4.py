@@ -215,7 +215,7 @@ class TaskManagerNodeV4(
         # Visual docking (object)
         self.declare_parameter("visual_docking_x_kp", 1.5)
         self.declare_parameter("visual_docking_z_kp", 1.0)
-        self.declare_parameter("visual_docking_x_tolerance_m", 0.01)
+        self.declare_parameter("visual_docking_x_tolerance_m", 0.05)
 
         # Grasp decision threshold (distance in camera z)
         self.declare_parameter("grasp_target_camera_z_m", 0.265)

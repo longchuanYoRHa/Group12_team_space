@@ -1,6 +1,6 @@
 import os
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, ExecuteProcess, RegisterEventHandler, LogInfo
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, ExecuteProcess, RegisterEventHandler, LogInfo, SetEnvironmentVariable
 from launch.event_handlers import OnProcessExit
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, PythonExpression, TextSubstitution
@@ -246,6 +246,10 @@ def generate_launch_description():
             'lidar_connected',
             default_value=lidar_connected_str,
             description='Whether lidar is connected (auto-detected)'
+        ),
+        SetEnvironmentVariable(
+            name="OMP_NUM_THREADS",
+            value="8"
         ),
 
         LogInfo(
