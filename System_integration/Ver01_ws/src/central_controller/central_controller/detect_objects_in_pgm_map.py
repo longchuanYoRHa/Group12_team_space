@@ -18,6 +18,7 @@ PGM 地图封闭空间内物体点位识别样例程序（独立脚本，非 ROS
 from __future__ import annotations
 
 import argparse
+import math
 from collections import deque
 from pathlib import Path
 from typing import List, Tuple, Optional
@@ -320,6 +321,128 @@ def pixel_to_map(
     return mx, my
 
 
+def map_to_pixel(
+    mx: float,
+    my: float,
+    resolution: float,
+    origin_x: float,
+    origin_y: float,
+    height: int,
+) -> Tuple[float, float]:
+    """地图坐标 (m) → 像素坐标 (x 向右, y 向下)，与 pixel_to_map 互逆。"""
+    px = (mx - origin_x) / resolution
+    py = (height - 1) - (my - origin_y) / resolution
+    return px, py
+
+
+def free_space_map_centroid(
+    w: int,
+    h: int,
+    pixels: List[int],
+    resolution: float,
+    origin_x: float,
+    origin_y: float,
+) -> Tuple[float, float]:
+    """全图 FREE(0) 像素在 map 坐标下的质心，用作无真车时导航预览的参考车位置。"""
+    sx = sy = 0.0
+    n = 0
+    for idx, pv in enumerate(pixels):
+        if pv != FREE:
+            continue
+        y, x = divmod(idx, w)
+        mx, my = pixel_to_map(float(x), float(y), resolution, origin_x, origin_y, h)
+        sx += mx
+        sy += my
+        n += 1
+    if n == 0:
+        return pixel_to_map((w - 1) * 0.5, (h - 1) * 0.5, resolution, origin_x, origin_y, h)
+    return sx / n, sy / n
+
+
+def compute_nav_goal_map_xy(
+    poi_mx: float,
+    poi_my: float,
+    robot_mx: float,
+    robot_my: float,
+    standoff_m: float,
+) -> Tuple[float, float]:
+    """
+    与 task_manager_utils.compute_pregrasp_pose 一致：沿车→兴趣点方向，
+    在兴趣点一侧距兴趣点 standoff_m 的 map 坐标（无 ROS 依赖）。
+    """
+    dx = robot_mx - poi_mx
+    dy = robot_my - poi_my
+    dist = math.hypot(dx, dy)
+    if dist > 1e-9:
+        dx /= dist
+        dy /= dist
+    else:
+        dx, dy = 1.0, 0.0
+    gx = poi_mx + standoff_m * dx
+    gy = poi_my + standoff_m * dy
+    return gx, gy
+
+
+def draw_interest_points_with_nav_goals(
+    w: int,
+    h: int,
+    pixels: List[int],
+    blobs: List[Tuple[float, float, int]],
+    resolution: float,
+    origin: Tuple[float, float],
+    robot_map_xy: Tuple[float, float],
+    standoff_m: float,
+    output_path: str,
+    marker_radius_px: int = 3,
+) -> None:
+    """
+    在 PGM 灰度底图上绘制：红色=兴趣点质心，绿色=导航待机点（与 compute_pregrasp_pose 一致），
+    青线连接二者。参考车位置用于计算待机点，默认取全图可通行质心。
+    """
+    if not _HAS_PIL:
+        print("未安装 Pillow，跳过生成兴趣点+导航图。可执行: pip install Pillow")
+        return
+    from PIL import ImageDraw
+
+    origin_x, origin_y = origin[0], origin[1]
+    rx, ry = robot_map_xy
+    img = Image.new("L", (w, h))
+    img.putdata(pixels)
+    rgb = img.convert("RGB")
+    drw = ImageDraw.Draw(rgb)
+    r = max(1, marker_radius_px)
+    print(f"导航预览参考车 (map): ({rx:.3f}, {ry:.3f}) m, standoff={standoff_m:.2f} m")
+    for i, (cx_px, cy_px, area) in enumerate(blobs):
+        poi_mx, poi_my = pixel_to_map(cx_px, cy_px, resolution, origin_x, origin_y, h)
+        gx, gy = compute_nav_goal_map_xy(poi_mx, poi_my, rx, ry, standoff_m)
+        npx, npy = map_to_pixel(gx, gy, resolution, origin_x, origin_y, h)
+        ix_p, iy_p = int(round(cx_px)), int(round(cy_px))
+        ix_n, iy_n = int(round(npx)), int(round(npy))
+        print(
+            f"  POI{i+1}: map=({poi_mx:.3f},{poi_my:.3f}) m, "
+            f"nav=({gx:.3f},{gy:.3f}) m, px_poi=({ix_p},{iy_p}) px_nav=({ix_n},{iy_n}) area={area}px"
+        )
+        if (
+            0 <= ix_p < w
+            and 0 <= iy_p < h
+            and 0 <= ix_n < w
+            and 0 <= iy_n < h
+        ):
+            drw.line([(ix_n, iy_n), (ix_p, iy_p)], fill=(0, 255, 255), width=1)
+        for ix, iy, fill, outline in (
+            (ix_p, iy_p, (255, 0, 0), (200, 0, 0)),
+            (ix_n, iy_n, (0, 220, 0), (0, 120, 0)),
+        ):
+            if 0 <= ix < w and 0 <= iy < h:
+                drw.ellipse(
+                    [ix - r, iy - r, ix + r, iy + r],
+                    fill=fill,
+                    outline=outline,
+                )
+    rgb.save(output_path)
+    print(f"已保存兴趣点+导航预览图: {output_path}")
+
+
 def draw_result_image(
     w: int,
     h: int,
@@ -563,6 +686,9 @@ def run_detection_enclosed_blobs(
     dedupe_min_separation_px: float = 4.0,
     output_image: Optional[str] = None,
     no_plot: bool = False,
+    with_nav_preview: bool = False,
+    nav_standoff_m: float = 0.42,
+    robot_map_xy: Optional[Tuple[float, float]] = None,
 ) -> None:
     """运行「白色中间有明显区块」识别，输出各区域中心坐标，并可选生成标注图。"""
     meta = load_map_metadata_from_yaml(pgm_path)
@@ -597,10 +723,29 @@ def run_detection_enclosed_blobs(
             f"面积 {area} px"
         )
     if not no_plot and blobs:
-        out = output_image
-        if not out:
-            out = str(Path(pgm_path).parent / (Path(pgm_path).stem + "_marked.png"))
-        draw_result_image(w, h, pixels, blobs, out)
+        if with_nav_preview:
+            out = output_image
+            if not out:
+                out = str(Path(pgm_path).parent / (Path(pgm_path).stem + "_poi_nav.png"))
+            rxy = robot_map_xy
+            if rxy is None:
+                rxy = free_space_map_centroid(w, h, pixels, resolution, origin[0], origin[1])
+            draw_interest_points_with_nav_goals(
+                w,
+                h,
+                pixels,
+                blobs,
+                resolution,
+                origin,
+                rxy,
+                nav_standoff_m,
+                out,
+            )
+        else:
+            out = output_image
+            if not out:
+                out = str(Path(pgm_path).parent / (Path(pgm_path).stem + "_marked.png"))
+            draw_result_image(w, h, pixels, blobs, out)
 
 
 def run_detection(
@@ -714,6 +859,27 @@ def main():
         help="标注图输出路径（默认: 与 PGM 同目录，文件名为 xxx_marked.png）",
     )
     parser.add_argument("--no-plot", action="store_true", help="不生成标注图")
+    parser.add_argument(
+        "--with-nav-preview",
+        action="store_true",
+        help="[enclosed-blobs] 在 PNG 上同时标出兴趣点(红)与导航待机点(绿)，青线为连线；"
+        "参考车位置默认取全图可通行像素质心，可用 --robot-map 指定",
+    )
+    parser.add_argument(
+        "--nav-standoff",
+        type=float,
+        default=0.42,
+        metavar="M",
+        help="[enclosed-blobs + --with-nav-preview] 距兴趣点的待机距离 (m)，默认 0.42",
+    )
+    parser.add_argument(
+        "--robot-map",
+        type=float,
+        nargs=2,
+        default=None,
+        metavar=("RX", "RY"),
+        help="[enclosed-blobs + --with-nav-preview] 参考车在 map 下的坐标 (m)；省略则用可通行质心",
+    )
     args = parser.parse_args()
     if args.mode == "enclosed-blobs":
         run_detection_enclosed_blobs(
@@ -726,6 +892,9 @@ def main():
             dedupe_min_separation_px=args.dedupe_px,
             output_image=args.output,
             no_plot=args.no_plot,
+            with_nav_preview=args.with_nav_preview,
+            nav_standoff_m=args.nav_standoff,
+            robot_map_xy=tuple(args.robot_map) if args.robot_map is not None else None,
         )
     else:
         run_detection(

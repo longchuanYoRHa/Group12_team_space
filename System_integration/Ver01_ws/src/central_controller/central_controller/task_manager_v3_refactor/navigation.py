@@ -235,6 +235,14 @@ class TaskManagerNavigationMixin:
                 )
                 self.state = TaskState.EXPLORE
                 self._publish_explore_resume_if_changed(True)
+            elif self.current_nav_purpose == NavPurpose.INTEREST_POINT:
+                self.get_logger().warn(
+                    "Nav2 interest point goal rejected; skipping this interest point."
+                )
+                self.nav2_goal_handle = None
+                self.current_nav_purpose = NavPurpose.NONE
+                self._skip_current_interest_point_after_nav_failure("rejected")
+                return
             self.nav2_goal_handle = None
             self.current_nav_purpose = NavPurpose.NONE
             return
@@ -306,6 +314,15 @@ class TaskManagerNavigationMixin:
                 )
             elif purpose == NavPurpose.INTEREST_POINT:
                 self._enter_precision_align(purpose, next_state_after_align=None)
+        elif purpose == NavPurpose.INTEREST_POINT and status != GoalStatus.STATUS_SUCCEEDED:
+            self.get_logger().warn(
+                f"Nav2 interest point goal finished without success (status={status}); "
+                "skipping this interest point."
+            )
+            self.nav2_goal_handle = None
+            self.current_nav_purpose = NavPurpose.NONE
+            self._skip_current_interest_point_after_nav_failure(f"status_{status}")
+            return
         elif status == GoalStatus.STATUS_ABORTED:
             self.get_logger().warn(f"Nav2 goal aborted ({purpose.value})")
         elif status == GoalStatus.STATUS_CANCELED:

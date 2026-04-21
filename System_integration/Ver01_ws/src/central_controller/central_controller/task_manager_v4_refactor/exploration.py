@@ -519,6 +519,19 @@ class TaskManagerExplorationMixin:
         )
         self._send_nav_goal(goal_pose, NavPurpose.INTEREST_POINT)
 
+    def _skip_current_interest_point_after_nav_failure(self, reason: str) -> None:
+        """Nav2 兴趣点目标被拒或结果非成功时：跳过当前索引并尝试下一个兴趣点。"""
+        if self.state != TaskState.NAV_TO_INTEREST_POINT:
+            return
+        self.get_logger().warn(
+            f"Interest point nav failure ({reason}); skipping index "
+            f"{self.interest_point_index} and advancing."
+        )
+        self.interest_point_index += 1
+        self.current_interest_point = None
+        self.state = TaskState.NAV_TO_INTEREST_POINT
+        self._nav_to_next_interest_point()
+
     def _start_bin_search_or_go_to_cached(self):
         if self.explore_finished_received and self.cargo_state == CargoState.HAS_OBJECT:
             self.get_logger().info(
