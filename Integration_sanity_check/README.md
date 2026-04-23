@@ -1,66 +1,65 @@
-Since the script is now portable and works on any laptop by checking subnets and auto-installing tools, the documentation needs to reflect these new "Safety Checks".
-Here is the updated, comprehensive README.md.
-------------------------------
-## 🛡️ Universal Sanity Check: NUC & Manipulator Integration## This automated tool verifies connectivity, synchronizes system clocks to the nanosecond, and launches ROS 2 nodes across a distributed system (Any Linux Laptop, Intel NUC, and Cobot Manipulator).## 🚀 What the Script Does
+# 🛡️ Universal Sanity Check: NUC, Rover & Manipulator Integration
 
-   1. Auto-Portability Check: Detects the local username and prompts for the local password securely.
-   2. Dependency Manager: Automatically installs sshpass and arp-scan if they are missing.
-   3. Subnet Safety Gate: Checks if the laptop is actually on the 10.42.0.x network before starting.
-   4. Network Discovery: Dynamically identifies the NUC's IP and the laptop's active network interface.
-   5. 3-Way Nano-Sync: Aligns Laptop -> NUC -> Manipulator clocks to prevent ROS 2 TF errors.
-   6. Vision & Hardware Audit: Fixes USB permissions and verifies RealSense detection for 30s.
+This automated tool verifies connectivity, synchronizes system clocks to the nanosecond, and launches ROS 2 nodes across a distributed system (**Any Linux Laptop**, **Intel NUC**, **Manipulator Arm**, and **Leo Rover Base**).
 
-------------------------------
-## 💻 How to Use## 1. Run the Sanity Check
-The script is now safe for any teammate. It will prompt for your local laptop password to perform network scans and time syncs.
+---
 
+## 🚀 What the Script Does
+
+1.  **Auto-Portability Check**: Detects the local username and prompts for the local password securely.
+2.  **Dependency Manager**: Automatically installs `sshpass` and `arp-scan` on the laptop if missing.
+3.  **Subnet Safety Gate**: Ensures the laptop is on the `10.42.0.x` network before starting.
+4.  **Network Discovery**: Dynamically finds the NUC via MAC address and identifies the active interface.
+5.  **4-Way Nano-Sync**: Aligns **Laptop ↔ NUC ↔ Manipulator ↔ Rover Base** clocks to prevent ROS 2 TF (Transform) errors.
+6.  **Chassis & Vision Audit**: Verifies that the Rover's IMU/Odometry stack and the NUC’s RealSense vision node are active and publishing.
+
+---
+
+## 💻 How to Use (One-Command Operations)
+
+### 1. Run the Full Sanity Check
+This sets up all clocks, installs tools, and starts the remote nodes.
+```bash
 chmod +x sanity_check.sh
 ./sanity_check.sh
+```
 
-## 2. Manual Debugging: Network Flush
-If the NUC is physically connected but "Not Found," clear your laptop's network cache manually:
+### 2. View Vision GUI on Laptop (One Command)
+Tunnels the graphical output from the NUC directly to your laptop screen via X11 Forwarding.
+```bash
+sshpass -p 'team12' ssh -YC leo-rover-12@10.42.0.227 "export ROS_DOMAIN_ID=12; export ROS_AUTOMATIC_DISCOVERY_RANGE=SUBNET; source ~/robots/bin/activate && cd ~/vision_pkg && source install/setup.bash; ros2 run vision_pkg rover_vision"
+```
 
-sudo ip neigh flush all
+### 3. Live Topic Stream (One Command)
+Monitor coordinates or raw data from your laptop terminal without manually logging into the NUC.
+```bash
+# Example: Stream green block coordinates
+sshpass -p 'team12' ssh leo-rover-12@10.42.0.227 "export ROS_DOMAIN_ID=12; source /opt/ros/jazzy/setup.bash; ros2 topic echo /target_pick/green"
+```
 
-------------------------------
-## 🔍 Viewing Topics (Live Data via SSH)
-To view live coordinates after the script finishes, SSH into the NUC (use the IP found in Phase 1):
+---
 
-# Example if NUC is at .227
-ssh leo-rover-12@10.42.0.227
-# Inside the NUC:
-export ROS_DOMAIN_ID=12
-export ROS_AUTOMATIC_DISCOVERY_RANGE=SUBNET
-ros2 topic echo /target_pick/green
+## 📊 Understanding the Output
 
-------------------------------
-## 📊 Understanding the Output## 1. Chrony NTP Table Breakdown
-In Phase 2, look for the System Peer Lock:
+### 1. Chrony NTP Table Breakdown
+Look for the **System Peer Lock** in Phase 2 (Arm) and Phase 4 (Rover):
+*   **STATE (^\*)**: The `*` indicates a perfect sync with the NUC master clock.
+*   **REACH (377)**: Indicates a 100% stable connection history (8/8 successful packets).
+*   **OFFSET**: Precision timing. Lower is better (e.g., `+16us` or `0.000016s`).
 
-* STATE (^*): The * indicates a perfect sync.
-* REACH (377): Indicates a 100% stable connection history.
-* OFFSET: Precision timing (e.g., -25us). Lower is better for ROS 2.
+### 2. Vision Detections & Node Status
+*   **[VISION NOTE]**: If "Recent Detections" says `[FAILURE]`, the node is working perfectly as long as the topics are `[MATCHED]`. It simply means no colored block was in the camera's view during the 30-second test.
 
-## 2. Vision Detections & Node Status
+---
 
-* [VISION NOTE]: If "Recent Detections" says [FAILURE], the node is still working perfectly as long as the topics are [MATCHED]. It simply means no block was in the camera's view during the test.
-
-## 3. Time Summary
-
-* [NOTE]: Millisecond differences in the final summary are due to SSH latency, not system clock desync.
-
-------------------------------
 ## ⚠️ Troubleshooting (Universal Fixes)
 
-* [CRITICAL FAILURE] Subnet Mismatch: Your laptop is on the wrong network.
-* Fix: Go to Settings -> Network -> IPv4. Change to Manual.
-   * Set IP: 10.42.0.50 | Netmask: 255.255.255.0 | Gateway: Leave blank.
-* Phase 1 Failure (NUC not found): Ensure the Ethernet/WiFi link to the Rover is active and the NUC is powered on.
-* Missing /arm/ Topics: Ensure the Cobot base has a Green Light and the USB cable is plugged into a USB 3.0 (Blue) port on the NUC.
-* Dependency Errors: Ensure your laptop has an internet connection for the first run so it can download sshpass.
+*   **[CRITICAL FAILURE] Subnet Mismatch**: Your laptop is on the wrong network.
+    *   **Fix**: Go to Settings -> Network -> IPv4. Change to **Manual**. Set IP: `10.42.0.50` | Netmask: `255.255.255.0`.
+*   **Missing /arm/ Topics**: Ensure the Cobot base has a **Green Light** and the USB cable is plugged into a **USB 3.0 (Blue)** port on the NUC.
+*   **No GUI Appears**: Ensure your laptop has an **X-Server** running (built-in on Linux; use Xming/VcXsrv on Windows).
+*   **Rover Sync Failure**: If Rover Base time shows `00:00:0X`, check the internal connection to `10.0.0.1`.
 
-------------------------------
-## END OF DOCUMENTATION
-Does the "Subnet Mismatch" warning help your teammates get their network settings right on the first try?
-
+---
+**END OF DOCUMENTATION**
 
