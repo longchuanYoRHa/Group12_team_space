@@ -1,4 +1,4 @@
-#!/home/student04/robots/bin/python3
+#!/home/leo-rover-12/robots/bin/python3
 import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Point
@@ -10,14 +10,14 @@ import math
 from ultralytics import YOLO
 
 # ---------- SETTINGS ----------
-WINDOW_NAME = "Rover Vision: Size Validator"
-OV_MODEL_DIR = "/home/student04/test/vision_pkg/src/vision_pkg/vision_pkg/best_openvino_model"
+WINDOW_NAME = "Rover Vision"
+OV_MODEL_DIR = "/home/leo-rover-12/vision_pkg/src/vision_pkg/vision_pkg/best_openvino_model"
 CONF_CUTOFF = 0.85
 IMG_SIZE = 640
 TARGET_CUBE_M = 0.02
 BIN_M = 0.20
 ERROR_MARGIN = 0.60  
-MAX_Z_LIMIT = 0.50
+MAX_Z_LIMIT = 0.60
 
 class RoverVisionNode(Node):
     def __init__(self):
