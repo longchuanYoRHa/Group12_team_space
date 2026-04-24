@@ -56,7 +56,7 @@ class ModuleTestExploreApproachNode(Node):
 
         self.declare_parameter("maps_directory", "")
         self.declare_parameter("map_save_basename", "explore_complete")
-        self.declare_parameter("approach_distance_m", 0.42)
+        self.declare_parameter("approach_distance_m", 0.30)
 
         self.state_pub = self.create_publisher(
             std_msgs.String, "module_test_explore_approach/state", 10

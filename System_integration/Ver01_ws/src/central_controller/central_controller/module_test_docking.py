@@ -58,7 +58,7 @@ class ModuleTestDockingNode(Node):
         self.declare_parameter("visual_align_timeout_sec", 120.0)
 
         # Same defaults as task_manager_node_v4 / alignment visual docking
-        self.declare_parameter("docking_linear_speed_mps", 0.01)
+        self.declare_parameter("docking_linear_speed_mps", 0.07)
         self.declare_parameter("docking_angular_speed_max_rps", 0.25)
         self.declare_parameter("visual_docking_x_kp", 1.5)
         self.declare_parameter("visual_docking_z_kp", 1.0)
