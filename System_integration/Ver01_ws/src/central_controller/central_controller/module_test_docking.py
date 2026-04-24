@@ -7,6 +7,9 @@ Docking module test (V4-style):
 - 10 Hz timer applies the same cmd_vel law as task_manager_v4_refactor/alignment.py
 - When |x| and |z - target| within tolerance -> publish /arm/target_pick (camera frame, m)
   and wait for arm/gripper status like before
+- After grasp success, enter place precision phase:
+  subscribe to /target_place/{red,green,blue} and align with same law; when aligned
+  publish /arm/target_place (camera frame, m)
 """
 
 from __future__ import annotations
@@ -30,8 +33,9 @@ def _clamp(value: float, low: float, high: float) -> float:
 
 class TestState(Enum):
     INIT = "init"
-    PRECISION_ALIGN = "precision_align"
+    PRECISION_ALIGN_PICK = "precision_align_pick"
     GRASP = "grasp"
+    PRECISION_ALIGN_PLACE = "precision_align_place"
     DONE = "done"
 
 
@@ -40,30 +44,37 @@ class ModuleTestDockingNode(Node):
         super().__init__("module_test_docking")
 
         self.current_state = TestState.INIT
-        self._visual_docking_last_point: Optional[geometry_msgs.Point] = None
+        self._visual_pick_last_point: Optional[geometry_msgs.Point] = None
+        self._visual_place_last_point: Optional[geometry_msgs.Point] = None
         self._visual_align_deadline: Optional[float] = None
 
         self.arm_status = "idle"
         self.gripper_status = "unknown"
         self._arm_cmd_sent = False
         self._grasp_target_point: Optional[geometry_msgs.Point] = None
+        self._place_target_point: Optional[geometry_msgs.Point] = None
 
         self.declare_parameter("camera_frame_id", "camera_link")
         self.declare_parameter("visual_align_timeout_sec", 120.0)
 
         # Same defaults as task_manager_node_v4 / alignment visual docking
-        self.declare_parameter("docking_linear_speed_mps", 0.01)
+        self.declare_parameter("docking_linear_speed_mps", 0.07)
         self.declare_parameter("docking_angular_speed_max_rps", 0.25)
         self.declare_parameter("visual_docking_x_kp", 1.5)
         self.declare_parameter("visual_docking_z_kp", 1.0)
         self.declare_parameter("visual_docking_x_tolerance_m", 0.05)
         self.declare_parameter("grasp_target_camera_z_m", 0.265)
         self.declare_parameter("grasp_target_camera_z_tolerance_m", 0.01)
+        self.declare_parameter("place_target_camera_z_m", 0.265)
+        self.declare_parameter("place_target_camera_z_tolerance_m", 0.01)
 
         self.state_pub = self.create_publisher(std_msgs.String, "module_test_docking/state", 10)
         self.cmd_vel_pub = self.create_publisher(geometry_msgs.Twist, "/cmd_vel", 10)
         self._arm_pick_pub = self.create_publisher(
             geometry_msgs.Point, "/arm/target_pick", 10
+        )
+        self._arm_place_pub = self.create_publisher(
+            geometry_msgs.Point, "/arm/target_place", 10
         )
 
         self.tf_buffer = tf2_ros.Buffer(cache_time=rclpy.duration.Duration(seconds=30.0))
@@ -83,6 +94,19 @@ class ModuleTestDockingNode(Node):
                 geometry_msgs.Point,
                 topic,
                 lambda msg, c=color, t=topic: self._pick_point_callback(msg, c, t),
+                qos_profile_sensor_data,
+            )
+            self._vision_subs.append(sub)
+
+        for color, topic in [
+            ("red", "/target_place/red"),
+            ("green", "/target_place/green"),
+            ("blue", "/target_place/blue"),
+        ]:
+            sub = self.create_subscription(
+                geometry_msgs.Point,
+                topic,
+                lambda msg, c=color, t=topic: self._place_point_callback(msg, c, t),
                 qos_profile_sensor_data,
             )
             self._vision_subs.append(sub)
@@ -112,10 +136,10 @@ class ModuleTestDockingNode(Node):
 
         if use_sim_time:
             self.get_logger().info(
-                "INIT: use_sim_time=true, skip /reset_odometry and enter PRECISION_ALIGN (visual)."
+                "INIT: use_sim_time=true, skip /reset_odometry and enter PRECISION_ALIGN_PICK (visual)."
             )
             self._reset_odom_done = True
-            self._enter_visual_align_phase()
+            self._enter_visual_align_pick_phase()
         else:
             self._start_reset_odometry()
 
@@ -141,7 +165,7 @@ class ModuleTestDockingNode(Node):
         if not self._reset_odom_client.wait_for_service(timeout_sec=8.0):
             self.get_logger().warn("INIT: /reset_odometry service not available, continue test.")
             self._reset_odom_done = True
-            self._enter_visual_align_phase()
+            self._enter_visual_align_pick_phase()
             return
 
         self.get_logger().info("INIT: calling /reset_odometry ...")
@@ -160,16 +184,16 @@ class ModuleTestDockingNode(Node):
             self.get_logger().warn(f"INIT: /reset_odometry call error: {e}")
 
         self._reset_odom_done = True
-        self._enter_visual_align_phase()
+        self._enter_visual_align_pick_phase()
 
-    def _enter_visual_align_phase(self):
+    def _enter_visual_align_pick_phase(self):
         self._stop_cmd_vel()
-        self._visual_docking_last_point = None
+        self._visual_pick_last_point = None
         self._grasp_target_point = None
         now = time.monotonic()
         timeout = float(self.get_parameter("visual_align_timeout_sec").value)
         self._visual_align_deadline = now + max(5.0, timeout)
-        self._set_state(TestState.PRECISION_ALIGN)
+        self._set_state(TestState.PRECISION_ALIGN_PICK)
         self.get_logger().info(
             "PRECISION_ALIGN: V4-style visual servo (camera x/z -> cmd_vel); "
             f"phase timeout {timeout:.0f}s. Waiting for /target_pick/*."
@@ -177,14 +201,37 @@ class ModuleTestDockingNode(Node):
 
     def _pick_point_callback(self, msg: geometry_msgs.Point, color: str, topic: str):
         self._last_vision_msg_time = self.get_clock().now()
-        if self.current_state != TestState.PRECISION_ALIGN:
+        if self.current_state != TestState.PRECISION_ALIGN_PICK:
             return
 
-        self._visual_docking_last_point = msg
+        self._visual_pick_last_point = msg
         self.get_logger().debug(f"Vision pick {color} from {topic}: x={msg.x:.3f} z={msg.z:.3f}")
 
+    def _enter_visual_align_place_phase(self):
+        self._stop_cmd_vel()
+        self._visual_place_last_point = None
+        self._place_target_point = None
+        now = time.monotonic()
+        timeout = float(self.get_parameter("visual_align_timeout_sec").value)
+        self._visual_align_deadline = now + max(5.0, timeout)
+        self._set_state(TestState.PRECISION_ALIGN_PLACE)
+        self.get_logger().info(
+            "PRECISION_ALIGN_PLACE: V4-style visual servo (camera x/z -> cmd_vel); "
+            f"phase timeout {timeout:.0f}s. Waiting for /target_place/*."
+        )
+
+    def _place_point_callback(self, msg: geometry_msgs.Point, color: str, topic: str):
+        self._last_vision_msg_time = self.get_clock().now()
+        if self.current_state != TestState.PRECISION_ALIGN_PLACE:
+            return
+
+        self._visual_place_last_point = msg
+        self.get_logger().debug(
+            f"Vision place {color} from {topic}: x={msg.x:.3f} z={msg.z:.3f}"
+        )
+
     def _visual_control_timer_cb(self):
-        if self.current_state != TestState.PRECISION_ALIGN:
+        if self.current_state not in (TestState.PRECISION_ALIGN_PICK, TestState.PRECISION_ALIGN_PLACE):
             return
 
         now = time.monotonic()
@@ -196,12 +243,20 @@ class ModuleTestDockingNode(Node):
             self._set_state(TestState.DONE)
             return
 
-        point = self._visual_docking_last_point
+        point = (
+            self._visual_pick_last_point
+            if self.current_state == TestState.PRECISION_ALIGN_PICK
+            else self._visual_place_last_point
+        )
         if point is None:
             return
 
-        target_z = float(self.get_parameter("grasp_target_camera_z_m").value)
-        z_tol = abs(float(self.get_parameter("grasp_target_camera_z_tolerance_m").value))
+        if self.current_state == TestState.PRECISION_ALIGN_PICK:
+            target_z = float(self.get_parameter("grasp_target_camera_z_m").value)
+            z_tol = abs(float(self.get_parameter("grasp_target_camera_z_tolerance_m").value))
+        else:
+            target_z = float(self.get_parameter("place_target_camera_z_m").value)
+            z_tol = abs(float(self.get_parameter("place_target_camera_z_tolerance_m").value))
         x_tol = abs(float(self.get_parameter("visual_docking_x_tolerance_m").value))
 
         max_w = abs(float(self.get_parameter("docking_angular_speed_max_rps").value))
@@ -217,14 +272,24 @@ class ModuleTestDockingNode(Node):
         aligned = (abs(x_error) <= x_tol) and (abs(z_error) <= z_tol)
         if aligned:
             self._stop_cmd_vel()
-            self._grasp_target_point = geometry_msgs.Point(
-                x=point.x, y=point.y, z=point.z
-            )
-            self.get_logger().info(
-                "PRECISION_ALIGN: aligned within tolerance -> GRASP "
-                f"(|x_err|={abs(x_error):.4f}, |z_err|={abs(z_error):.4f})."
-            )
-            self._enter_grasp_state()
+            if self.current_state == TestState.PRECISION_ALIGN_PICK:
+                self._grasp_target_point = geometry_msgs.Point(
+                    x=point.x, y=point.y, z=point.z
+                )
+                self.get_logger().info(
+                    "PRECISION_ALIGN_PICK: aligned within tolerance -> GRASP "
+                    f"(|x_err|={abs(x_error):.4f}, |z_err|={abs(z_error):.4f})."
+                )
+                self._enter_grasp_state()
+            else:
+                self._place_target_point = geometry_msgs.Point(
+                    x=point.x, y=point.y, z=point.z
+                )
+                self.get_logger().info(
+                    "PRECISION_ALIGN_PLACE: aligned within tolerance -> publish /arm/target_place "
+                    f"(|x_err|={abs(x_error):.4f}, |z_err|={abs(z_error):.4f})."
+                )
+                self._publish_place_target_and_finish()
             return
 
         twist = geometry_msgs.Twist()
@@ -279,6 +344,20 @@ class ModuleTestDockingNode(Node):
         self._arm_pick_pub.publish(target_pt)
         self._arm_cmd_sent = True
 
+    def _publish_place_target_and_finish(self):
+        if self._place_target_point is None:
+            self.get_logger().warn("PLACE: no aligned vision point; ending test.")
+            self._set_state(TestState.DONE)
+            return
+
+        target_pt = self._place_target_point
+        self.get_logger().info(
+            "PLACE: publishing /arm/target_place in camera frame (meters) "
+            f"({target_pt.x:.3f}, {target_pt.y:.3f}, {target_pt.z:.3f})"
+        )
+        self._arm_place_pub.publish(target_pt)
+        self._set_state(TestState.DONE)
+
     def _try_finish_grasp_from_topics(self):
         if self.current_state != TestState.GRASP:
             return
@@ -287,7 +366,7 @@ class ModuleTestDockingNode(Node):
 
         if self.arm_status == "holding" and self.gripper_status == "object_held":
             self.get_logger().info("GRASP succeeded (arm holding + object_held).")
-            self._set_state(TestState.DONE)
+            self._enter_visual_align_place_phase()
             return
 
         if self.arm_status == "error":

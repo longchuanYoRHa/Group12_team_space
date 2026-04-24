@@ -215,9 +215,15 @@ def generate_launch_description():
             on_exit=[
                 static_tf_base_to_laser,
                 laser_filter_node,
-                slam_toolbox_node,
-                slam_configure_activate_cmd,
+                reset_odometry_cmd,
             ],
+        )
+    )
+
+    reset_odometry_handler = RegisterEventHandler(
+        OnProcessExit(
+            target_action=reset_odometry_cmd,
+            on_exit=[slam_toolbox_node, slam_configure_activate_cmd],
         )
     )
 
@@ -231,13 +237,6 @@ def generate_launch_description():
     wait_for_map_handler = RegisterEventHandler(
         OnProcessExit(
             target_action=wait_for_map_cmd,
-            on_exit=[reset_odometry_cmd],
-        )
-    )
-
-    reset_odometry_handler = RegisterEventHandler(
-        OnProcessExit(
-            target_action=reset_odometry_cmd,
             on_exit=[nav2_launch, wait_for_nav_action_cmd],
         )
     )
@@ -268,9 +267,9 @@ def generate_launch_description():
             rplidar_launch,
             wait_for_scan_cmd,
             wait_for_scan_handler,
+            reset_odometry_handler,
             after_slam_lifecycle_handler,
             wait_for_map_handler,
-            reset_odometry_handler,
             wait_for_nav_action_handler,
         ]
     )

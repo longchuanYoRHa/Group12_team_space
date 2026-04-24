@@ -215,8 +215,8 @@ behavior_server:
     robot_base_frame: base_link
     transform_tolerance: 0.1
     simulate_ahead_time: 2.0
-    max_rotational_vel: 0.10
-    min_rotational_vel: 0.06
+    max_rotational_vel: 0.20
+    min_rotational_vel: 0.10
     rotational_acc_lim: 1.2
 waypoint_follower:
   ros__parameters:
