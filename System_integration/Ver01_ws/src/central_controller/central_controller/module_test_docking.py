@@ -35,6 +35,7 @@ class TestState(Enum):
     INIT = "init"
     PRECISION_ALIGN_PICK = "precision_align_pick"
     GRASP = "grasp"
+    BACKUP_BEFORE_PLACE = "backup_before_place"
     PRECISION_ALIGN_PLACE = "precision_align_place"
     DONE = "done"
 
@@ -47,6 +48,7 @@ class ModuleTestDockingNode(Node):
         self._visual_pick_last_point: Optional[geometry_msgs.Point] = None
         self._visual_place_last_point: Optional[geometry_msgs.Point] = None
         self._visual_align_deadline: Optional[float] = None
+        self._backup_deadline: Optional[float] = None
 
         self.arm_status = "idle"
         self.gripper_status = "unknown"
@@ -67,6 +69,8 @@ class ModuleTestDockingNode(Node):
         self.declare_parameter("grasp_target_camera_z_tolerance_m", 0.01)
         self.declare_parameter("place_target_camera_z_m", 0.265)
         self.declare_parameter("place_target_camera_z_tolerance_m", 0.01)
+        self.declare_parameter("backup_before_place_distance_m", 0.50)
+        self.declare_parameter("backup_before_place_speed_mps", 0.10)
 
         self.state_pub = self.create_publisher(std_msgs.String, "module_test_docking/state", 10)
         self.cmd_vel_pub = self.create_publisher(geometry_msgs.Twist, "/cmd_vel", 10)
@@ -211,6 +215,7 @@ class ModuleTestDockingNode(Node):
         self._stop_cmd_vel()
         self._visual_place_last_point = None
         self._place_target_point = None
+        self._backup_deadline = None
         now = time.monotonic()
         timeout = float(self.get_parameter("visual_align_timeout_sec").value)
         self._visual_align_deadline = now + max(5.0, timeout)
@@ -218,6 +223,24 @@ class ModuleTestDockingNode(Node):
         self.get_logger().info(
             "PRECISION_ALIGN_PLACE: V4-style visual servo (camera x/z -> cmd_vel); "
             f"phase timeout {timeout:.0f}s. Waiting for /target_place/*."
+        )
+
+    def _enter_backup_before_place_phase(self):
+        self._stop_cmd_vel()
+        self._visual_align_deadline = None
+        self._visual_place_last_point = None
+        self._place_target_point = None
+
+        dist_m = abs(float(self.get_parameter("backup_before_place_distance_m").value))
+        speed_mps = abs(float(self.get_parameter("backup_before_place_speed_mps").value))
+        speed_mps = max(0.01, speed_mps)
+
+        duration_s = dist_m / speed_mps
+        self._backup_deadline = time.monotonic() + max(0.1, duration_s)
+        self._set_state(TestState.BACKUP_BEFORE_PLACE)
+        self.get_logger().info(
+            f"BACKUP_BEFORE_PLACE: cmd_vel back {dist_m:.2f}m at {speed_mps:.2f}m/s "
+            f"(~{duration_s:.1f}s), then enter PRECISION_ALIGN_PLACE."
         )
 
     def _place_point_callback(self, msg: geometry_msgs.Point, color: str, topic: str):
@@ -231,7 +254,26 @@ class ModuleTestDockingNode(Node):
         )
 
     def _visual_control_timer_cb(self):
-        if self.current_state not in (TestState.PRECISION_ALIGN_PICK, TestState.PRECISION_ALIGN_PLACE):
+        if self.current_state == TestState.BACKUP_BEFORE_PLACE:
+            now = time.monotonic()
+            if self._backup_deadline is not None and now >= self._backup_deadline:
+                self._stop_cmd_vel()
+                self.get_logger().info("BACKUP_BEFORE_PLACE: done -> enter PRECISION_ALIGN_PLACE.")
+                self._enter_visual_align_place_phase()
+                return
+
+            speed_mps = abs(float(self.get_parameter("backup_before_place_speed_mps").value))
+            speed_mps = max(0.01, speed_mps)
+            twist = geometry_msgs.Twist()
+            twist.linear.x = -speed_mps
+            twist.angular.z = 0.0
+            self.cmd_vel_pub.publish(twist)
+            return
+
+        if self.current_state not in (
+            TestState.PRECISION_ALIGN_PICK,
+            TestState.PRECISION_ALIGN_PLACE,
+        ):
             return
 
         now = time.monotonic()
@@ -366,7 +408,7 @@ class ModuleTestDockingNode(Node):
 
         if self.arm_status == "holding" and self.gripper_status == "object_held":
             self.get_logger().info("GRASP succeeded (arm holding + object_held).")
-            self._enter_visual_align_place_phase()
+            self._enter_backup_before_place_phase()
             return
 
         if self.arm_status == "error":

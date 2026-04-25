@@ -201,7 +201,7 @@ class TaskManagerNodeV4(
         self.declare_parameter("pregrasp_distance", 0.5)
         self.declare_parameter("interest_point_standoff_m", 0.30)
         self.declare_parameter("interest_point_max_bbox_m", 0.30)
-        self.declare_parameter("interest_point_dedupe_min_separation_px", 4.0)
+        self.declare_parameter("interest_point_dedupe_min_separation_px", 6.0)
         self.declare_parameter("preplace_distance", 0.6)
         self.declare_parameter("camera_frame_id", "camera_link")
         self.declare_parameter("maps_directory", "")
@@ -211,7 +211,7 @@ class TaskManagerNodeV4(
         self.declare_parameter("map_origin_y", DEFAULT_ORIGIN[1])
         self.declare_parameter("wait_at_interest_point_sec", 15.0)
 
-        self.declare_parameter("docking_linear_speed_mps", 0.01)
+        self.declare_parameter("docking_linear_speed_mps", 0.08)
         self.declare_parameter("docking_angular_speed_max_rps", 0.25)
         self.declare_parameter("docking_stop_distance_m", 0.265)
 
