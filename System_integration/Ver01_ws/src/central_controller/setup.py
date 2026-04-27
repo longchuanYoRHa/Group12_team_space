@@ -15,7 +15,7 @@ setup(
         (os.path.join('share', package_name, 'launch'),
          glob('launch/*launch.[pxy][yma]*')),
          (os.path.join('share', package_name, 'config'),
-         glob('config/*.yaml')),
+         glob('config/*.yaml') + glob('config/*.xml')),
          (os.path.join('share', package_name, 'maps'),
          glob('maps/*')),
          (os.path.join('share', package_name, 'config'),

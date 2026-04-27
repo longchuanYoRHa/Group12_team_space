@@ -138,9 +138,14 @@ def generate_launch_description():
         output='screen'
     )
 
+    # Wait until Nav2 is fully up:
+    #   1) navigate_to_pose action is advertised, AND
+    #   2) /lifecycle_manager_navigation/is_active returns success=True
+    #      (equivalent to the "Managed nodes are active" log line, which only
+    #       fires after docking_server and every other managed node is active).
     wait_for_nav_action_cmd = ExecuteProcess(
         cmd=['bash', '-c',
-             'timeout=120; elapsed=0; '
+             'timeout=180; elapsed=0; '
              'until ros2 action list | grep -q "navigate_to_pose"; do '
              '  echo "Waiting for navigate_to_pose... ($elapsed/$timeout x0.1s)"; '
              '  sleep 0.1; elapsed=$((elapsed+1)); '
@@ -148,7 +153,19 @@ def generate_launch_description():
              '    echo "ERROR: navigate_to_pose not available"; exit 1; '
              '  fi; '
              'done; '
-             'echo "navigate_to_pose action server is available"'],
+             'echo "navigate_to_pose action server is available, '
+             'now waiting for lifecycle_manager_navigation to report active..."; '
+             'until ros2 service call /lifecycle_manager_navigation/is_active '
+             '       std_srvs/srv/Trigger "{}" 2>/dev/null '
+             '       | grep -Eq "success=True|success: True"; do '
+             '  echo "Waiting for lifecycle_manager_navigation/is_active... '
+             '($elapsed/$timeout x0.1s)"; '
+             '  sleep 0.1; elapsed=$((elapsed+1)); '
+             '  if [ $elapsed -ge $((timeout * 10)) ]; then '
+             '    echo "ERROR: lifecycle_manager_navigation not active in time"; exit 1; '
+             '  fi; '
+             'done; '
+             'echo "lifecycle_manager_navigation reports active (managed nodes are active)"'],
         output='screen'
     )
 
