@@ -109,6 +109,7 @@ class TaskManagerNodeV4(
         self.interest_point_index = 0
         self.current_interest_point = None
         self.wait_at_point_start_time = None
+        self._last_nav2_distance_remaining_m = None
 
         self.arm_status = "idle"
         self.gripper_status = "unknown"
@@ -202,6 +203,7 @@ class TaskManagerNodeV4(
         self.declare_parameter("interest_point_standoff_m", 0.30)
         self.declare_parameter("interest_point_max_bbox_m", 0.30)
         self.declare_parameter("interest_point_dedupe_min_separation_px", 6.0)
+        self.declare_parameter("interest_point_vision_trigger_distance_m", 1.0)
         self.declare_parameter("preplace_distance", 0.6)
         self.declare_parameter("camera_frame_id", "camera_link")
         self.declare_parameter("maps_directory", "")
@@ -237,11 +239,6 @@ class TaskManagerNodeV4(
             "task_manager/get_state",
             self._handle_get_state_service,
         )
-        self._reset_odom_client = self.create_client(Trigger, "/reset_odometry")
-        self._reset_odom_after_nav2_done = False
-        self._reset_odom_after_nav2_started_at = None
-        self._reset_odom_after_nav2_future = None
-        self._reset_odom_after_nav2_last_warn_sec = 0.0
 
     def _setup_csv_logger(self) -> None:
         if not self.get_parameter("detection_map_coordinates_csv_enable").value:

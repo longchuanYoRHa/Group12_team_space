@@ -206,9 +206,20 @@ class TaskManagerNavigationMixin:
         goal_msg.pose = goal_pose
         self.current_nav_purpose = purpose
         self.nav2_goal_handle = None
+        self._last_nav2_distance_remaining_m = None
         self.get_logger().info(f"Sending Nav2 goal for {purpose.value}")
-        send_goal_future = self.nav2_client.send_goal_async(goal_msg)
+        send_goal_future = self.nav2_client.send_goal_async(
+            goal_msg,
+            feedback_callback=self.nav2_feedback_callback,
+        )
         send_goal_future.add_done_callback(self.nav2_goal_response_callback)
+
+    def nav2_feedback_callback(self, feedback_msg):
+        feedback = feedback_msg.feedback
+        distance_remaining = getattr(feedback, "distance_remaining", None)
+        if distance_remaining is None:
+            return
+        self._last_nav2_distance_remaining_m = float(distance_remaining)
 
     def nav2_goal_response_callback(self, future):
         self.dispatch(Nav2GoalResponseEvent(future))

@@ -117,6 +117,10 @@ def generate_launch_description():
         launch_arguments={
             'use_sim_time': use_sim_time_subst,
             'params_file': nav2_params_file,
+            'bt_xml_filename': PathJoinSubstitution([
+            controller_pkg_dir,
+            'config',
+            'my_recovery.xml']),
         }.items()
     )
 
@@ -197,10 +201,19 @@ def generate_launch_description():
             output='screen',
         )
 
-    # After /scan: static TF + laser filter + SLAM + lifecycle script (all parallel)
+    # After /scan: reset odometry first (real robot only) or no-op (sim).
+    # SLAM is started AFTER odom reset so that map->odom->base_link stays consistent.
     wait_for_scan_handler = RegisterEventHandler(
         OnProcessExit(
             target_action=wait_for_scan_cmd,
+            on_exit=[reset_odometry_cmd]
+        )
+    )
+
+    # After odom reset (or sim skip): static TF + laser filter + SLAM + lifecycle script (all parallel)
+    reset_odometry_handler = RegisterEventHandler(
+        OnProcessExit(
+            target_action=reset_odometry_cmd,
             on_exit=[
                 static_tf_base_to_laser,
                 laser_filter_node,
@@ -218,18 +231,10 @@ def generate_launch_description():
         )
     )
 
-    # After /map: reset odom (real robot only) or no-op (sim)
+    # After /map: Nav2 and navigate_to_pose wait in parallel (no second odom reset)
     wait_for_map_handler = RegisterEventHandler(
         OnProcessExit(
             target_action=wait_for_map_cmd,
-            on_exit=[reset_odometry_cmd]
-        )
-    )
-
-    # After reset (or sim skip): Nav2 and navigate_to_pose wait in parallel
-    reset_odometry_handler = RegisterEventHandler(
-        OnProcessExit(
-            target_action=reset_odometry_cmd,
             on_exit=[nav2_launch, wait_for_nav_action_cmd],
         )
     )
@@ -264,8 +269,8 @@ def generate_launch_description():
         rplidar_launch,
         wait_for_scan_cmd,
         wait_for_scan_handler,
+        reset_odometry_handler,
         after_slam_lifecycle_handler,
         wait_for_map_handler,
-        reset_odometry_handler,
         wait_for_nav_action_handler,
     ])

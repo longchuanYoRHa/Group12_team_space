@@ -7,7 +7,6 @@ import subprocess
 import geometry_msgs.msg as geometry_msgs
 import rclpy
 import std_msgs.msg as std_msgs
-from std_srvs.srv import Trigger
 
 from central_controller.detect_objects_in_pgm_map import get_interest_points_from_pgm
 from central_controller.task_manager_utils import (
@@ -30,53 +29,6 @@ class TaskManagerExplorationMixin:
         if not self.nav2_client.wait_for_server(timeout_sec=1.0):
             self.get_logger().warn("Waiting for Nav2 server...")
             return
-
-        if not self._reset_odom_after_nav2_done:
-            now = self.get_clock().now()
-            if self._reset_odom_after_nav2_started_at is None:
-                self._reset_odom_after_nav2_started_at = now
-
-            elapsed = (now - self._reset_odom_after_nav2_started_at).nanoseconds / 1e9
-            if elapsed > 8.0:
-                self.get_logger().warn(
-                    "INIT: /reset_odometry not completed within 8s; continue without odom reset."
-                )
-                self._reset_odom_after_nav2_done = True
-            elif self._reset_odom_after_nav2_future is not None:
-                if self._reset_odom_after_nav2_future.done():
-                    try:
-                        resp = self._reset_odom_after_nav2_future.result()
-                        if resp is not None and getattr(resp, "success", False):
-                            self.get_logger().info(
-                                f"INIT: /reset_odometry success: {resp.message}"
-                            )
-                        else:
-                            message = "" if resp is None else getattr(resp, "message", "")
-                            self.get_logger().warn(
-                                f"INIT: /reset_odometry returned failure: {message}"
-                            )
-                    except Exception as exc:
-                        self.get_logger().warn(
-                            f"INIT: /reset_odometry call failed: {exc}"
-                        )
-                    self._reset_odom_after_nav2_done = True
-                else:
-                    return
-            else:
-                if not self._reset_odom_client.service_is_ready():
-                    sec = now.nanoseconds / 1e9
-                    if sec - self._reset_odom_after_nav2_last_warn_sec >= 1.0:
-                        self.get_logger().warn(
-                            "INIT: waiting for /reset_odometry service..."
-                        )
-                        self._reset_odom_after_nav2_last_warn_sec = sec
-                    return
-
-                self.get_logger().info("INIT: calling /reset_odometry ...")
-                self._reset_odom_after_nav2_future = self._reset_odom_client.call_async(
-                    Trigger.Request()
-                )
-                return
 
         try:
             transform = self.tf_buffer.lookup_transform("map", "base_link", rclpy.time.Time())
@@ -142,6 +94,42 @@ class TaskManagerExplorationMixin:
 
         if self.state == TaskState.GRASP:
             self._execute_grasp_with_current_object(msg, color)
+            return
+
+        if self.state == TaskState.NAV_TO_INTEREST_POINT:
+            trigger_distance_m = float(
+                self.get_parameter("interest_point_vision_trigger_distance_m").value
+            )
+            distance_remaining_m = self._last_nav2_distance_remaining_m
+            if (
+                self.current_nav_purpose == NavPurpose.INTEREST_POINT
+                and distance_remaining_m is not None
+                and distance_remaining_m < trigger_distance_m
+            ):
+                if self._map_coords_csv:
+                    self._map_coords_csv.log_object_map_nav(
+                        color,
+                        msg.x,
+                        msg.y,
+                        msg.z,
+                        pose_stamped.pose.position.x,
+                        pose_stamped.pose.position.y,
+                        self.state.name,
+                    )
+                self.get_logger().info(
+                    "Object seen while approaching interest point "
+                    f"(Nav2 remaining={distance_remaining_m:.2f} m < "
+                    f"{trigger_distance_m:.2f} m); switching to visual docking."
+                )
+                self._cancel_nav2_goal_if_any()
+                self._enter_precision_align(
+                    NavPurpose.INTEREST_POINT,
+                    next_state_after_align=TaskState.GRASP,
+                )
+                self._handle_precision_align_vision(point_msg=msg, is_object=True)
+                return
+
+            self.object_detection_count = 0
             return
 
         if self.state != TaskState.EXPLORE:

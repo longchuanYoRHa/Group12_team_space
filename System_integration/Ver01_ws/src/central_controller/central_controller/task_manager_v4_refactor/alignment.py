@@ -266,36 +266,23 @@ class TaskManagerAlignmentMixin:
     def _start_backup_after_action(
         self, next_state: TaskState, explore_resume_after_restore
     ):
-        backup_dist = abs(float(self.get_parameter("backup_distance_m").value))
         self._backup_end_time = None
         self._backup_next_state = next_state
         self._backup_after_restore_explore_resume = explore_resume_after_restore
         self.state = TaskState.BACKUP_AFTER_ACTION
 
-        goal_pose = self._build_backward_nav_goal_in_frame(backup_dist, "map")
-        if goal_pose is None:
-            self.get_logger().warn(
-                "BACKUP_AFTER_ACTION: failed to build backup nav goal; "
-                "falling back to cmd_vel backup."
-            )
-            self._start_backup_cmd_vel_fallback()
-            return
-
-        self.get_logger().info(
-            "BACKUP_AFTER_ACTION: sending nav goal to current-heading rear point "
-            f"({goal_pose.pose.position.x:.3f}, {goal_pose.pose.position.y:.3f}) in map."
-        )
-        self._send_nav_goal(goal_pose, NavPurpose.BACKUP_AFTER_ACTION)
+        # 直接使用 cmd_vel 反向后退 backup_distance_m（默认 0.20 m），不再尝试 nav2 goal。
+        self._start_backup_cmd_vel_fallback()
 
     def _start_backup_cmd_vel_fallback(self):
-        backup_dist = float(self.get_parameter("backup_distance_m").value)
+        backup_dist = abs(float(self.get_parameter("backup_distance_m").value))
         linear_speed = float(self.get_parameter("docking_linear_speed_mps").value)
         linear_speed = max(1e-4, abs(linear_speed))
         duration = backup_dist / linear_speed
 
         self._backup_end_time = time.monotonic() + duration
         self.get_logger().info(
-            f"BACKUP_AFTER_ACTION: cmd_vel fallback backing up {backup_dist:.2f} m "
+            f"BACKUP_AFTER_ACTION: cmd_vel backing up {backup_dist:.2f} m "
             f"for {duration:.1f} s."
         )
 
