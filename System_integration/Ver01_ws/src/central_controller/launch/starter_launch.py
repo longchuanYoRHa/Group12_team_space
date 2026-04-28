@@ -110,6 +110,11 @@ def generate_launch_description():
 
     nav2_params_file = PathJoinSubstitution([controller_pkg_dir, 'config', 'nav2_params_smac2d_rpp.yaml'])
 
+    # NOTE: nav2_bringup's navigation_launch.py does NOT accept a
+    # `bt_xml_filename` launch argument. The custom NavigateToPose behavior
+    # tree is configured via the `default_nav_to_pose_bt_xml` parameter
+    # inside `nav2_params_smac2d_rpp.yaml` (under bt_navigator.ros__parameters),
+    # using `$(find-pkg-share central_controller)/config/my_recovery.xml`.
     nav2_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             PathJoinSubstitution([nav2_bringup_dir, 'launch', 'navigation_launch.py'])
@@ -117,10 +122,6 @@ def generate_launch_description():
         launch_arguments={
             'use_sim_time': use_sim_time_subst,
             'params_file': nav2_params_file,
-            'bt_xml_filename': PathJoinSubstitution([
-            controller_pkg_dir,
-            'config',
-            'my_recovery.xml']),
         }.items()
     )
 
@@ -138,34 +139,72 @@ def generate_launch_description():
         output='screen'
     )
 
-    # Wait until Nav2 is fully up:
-    #   1) navigate_to_pose action is advertised, AND
-    #   2) /lifecycle_manager_navigation/is_active returns success=True
-    #      (equivalent to the "Managed nodes are active" log line, which only
-    #       fires after docking_server and every other managed node is active).
+    # Wait until Nav2 is FULLY up before starting task_manager. We can't rely
+    # on a single check because:
+    #   - navigate_to_pose action appears as soon as bt_navigator activates,
+    #     well before docking_server / collision_monitor finish bonding.
+    #   - `ros2 service call /lifecycle_manager_navigation/is_active` blocks
+    #     forever while the service does not yet exist, so it MUST be wrapped
+    #     in `timeout` and the service presence MUST be checked first.
+    #
+    # Strategy (three phases, polled with a 180 s wall-clock budget shared via
+    # `elapsed` counted in 0.5 s ticks):
+    #   1) navigate_to_pose action is advertised
+    #   2) /docking_server is in lifecycle state `active` -- this is the last
+    #      managed node that lifecycle_manager_navigation activates (matches
+    #      "Server docking_server connected with bond" / "Managed nodes are
+    #      active" in your logs).
+    #   3) /lifecycle_manager_navigation/is_active returns success=True
+    #      (final authoritative check that the manager set system_active=true).
     wait_for_nav_action_cmd = ExecuteProcess(
         cmd=['bash', '-c',
-             'timeout=180; elapsed=0; '
-             'until ros2 action list | grep -q "navigate_to_pose"; do '
-             '  echo "Waiting for navigate_to_pose... ($elapsed/$timeout x0.1s)"; '
-             '  sleep 0.1; elapsed=$((elapsed+1)); '
-             '  if [ $elapsed -ge $((timeout * 10)) ]; then '
-             '    echo "ERROR: navigate_to_pose not available"; exit 1; '
+             'set -u; '
+             'TICK=0.5; MAX_TICKS=360; elapsed=0; '
+             # Phase 1: navigate_to_pose action available
+             'echo "[wait-nav2] Phase 1/3: waiting for navigate_to_pose action..."; '
+             'until ros2 action list 2>/dev/null | grep -q "navigate_to_pose"; do '
+             '  sleep $TICK; elapsed=$((elapsed+1)); '
+             '  if [ $((elapsed % 10)) -eq 0 ]; then '
+             '    echo "[wait-nav2] Phase 1: still waiting navigate_to_pose ($elapsed/$MAX_TICKS x${TICK}s)"; '
+             '  fi; '
+             '  if [ $elapsed -ge $MAX_TICKS ]; then '
+             '    echo "[wait-nav2] ERROR: navigate_to_pose not available in time"; exit 1; '
              '  fi; '
              'done; '
-             'echo "navigate_to_pose action server is available, '
-             'now waiting for lifecycle_manager_navigation to report active..."; '
-             'until ros2 service call /lifecycle_manager_navigation/is_active '
-             '       std_srvs/srv/Trigger "{}" 2>/dev/null '
-             '       | grep -Eq "success=True|success: True"; do '
-             '  echo "Waiting for lifecycle_manager_navigation/is_active... '
-             '($elapsed/$timeout x0.1s)"; '
-             '  sleep 0.1; elapsed=$((elapsed+1)); '
-             '  if [ $elapsed -ge $((timeout * 10)) ]; then '
-             '    echo "ERROR: lifecycle_manager_navigation not active in time"; exit 1; '
+             'echo "[wait-nav2] Phase 1 done: navigate_to_pose action server is up."; '
+             # Phase 2: docking_server lifecycle state == active
+             'echo "[wait-nav2] Phase 2/3: waiting for /docking_server lifecycle == active..."; '
+             'until ros2 lifecycle get /docking_server 2>/dev/null | grep -q "^active"; do '
+             '  sleep $TICK; elapsed=$((elapsed+1)); '
+             '  if [ $((elapsed % 10)) -eq 0 ]; then '
+             '    echo "[wait-nav2] Phase 2: still waiting docking_server active ($elapsed/$MAX_TICKS x${TICK}s)"; '
+             '  fi; '
+             '  if [ $elapsed -ge $MAX_TICKS ]; then '
+             '    echo "[wait-nav2] ERROR: /docking_server not active in time"; exit 1; '
              '  fi; '
              'done; '
-             'echo "lifecycle_manager_navigation reports active (managed nodes are active)"'],
+             'echo "[wait-nav2] Phase 2 done: /docking_server is active."; '
+             # Phase 3: /lifecycle_manager_navigation/is_active service exists, then returns success=True
+             'echo "[wait-nav2] Phase 3/3: waiting for /lifecycle_manager_navigation/is_active service..."; '
+             'until ros2 service list 2>/dev/null | grep -q "/lifecycle_manager_navigation/is_active"; do '
+             '  sleep $TICK; elapsed=$((elapsed+1)); '
+             '  if [ $elapsed -ge $MAX_TICKS ]; then '
+             '    echo "[wait-nav2] ERROR: is_active service not found in time"; exit 1; '
+             '  fi; '
+             'done; '
+             'echo "[wait-nav2] Phase 3: is_active service found, polling for success=True..."; '
+             'until timeout 3 ros2 service call /lifecycle_manager_navigation/is_active '
+             '         std_srvs/srv/Trigger "{}" 2>/dev/null '
+             '         | grep -Eiq "success[ =:]+true"; do '
+             '  sleep $TICK; elapsed=$((elapsed+1)); '
+             '  if [ $((elapsed % 10)) -eq 0 ]; then '
+             '    echo "[wait-nav2] Phase 3: still waiting is_active=true ($elapsed/$MAX_TICKS x${TICK}s)"; '
+             '  fi; '
+             '  if [ $elapsed -ge $MAX_TICKS ]; then '
+             '    echo "[wait-nav2] ERROR: lifecycle_manager_navigation never reported active"; exit 1; '
+             '  fi; '
+             'done; '
+             'echo "[wait-nav2] Phase 3 done: Nav2 fully active (managed nodes are active)."'],
         output='screen'
     )
 
