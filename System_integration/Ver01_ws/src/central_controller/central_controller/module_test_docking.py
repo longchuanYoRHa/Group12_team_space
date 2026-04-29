@@ -51,6 +51,7 @@ class ModuleTestDockingNode(Node):
         self._visual_align_deadline: Optional[float] = None
         self._backup_deadline: Optional[float] = None
         self._forward_deadline: Optional[float] = None
+        self._forward_stop_hold_deadline: Optional[float] = None
 
         self.arm_status = "idle"
         self.gripper_status = "unknown"
@@ -77,6 +78,7 @@ class ModuleTestDockingNode(Node):
         self.declare_parameter("place_trigger_camera_z_tolerance", 0.5)
         self.declare_parameter("forward_before_place_distance_m", 0.10)
         self.declare_parameter("forward_before_place_speed_mps", 0.10)
+        self.declare_parameter("forward_before_place_stop_hold_sec", 0.2)
         self.declare_parameter("fixed_place_target_x", 0.0)
         self.declare_parameter("fixed_place_target_y", 0.0)
         self.declare_parameter("fixed_place_target_z", 27.5)
@@ -258,17 +260,16 @@ class ModuleTestDockingNode(Node):
         self._stop_cmd_vel()
         self._visual_align_deadline = None
         self._forward_deadline = None
+        self._forward_stop_hold_deadline = None
 
-        dist_m = abs(float(self.get_parameter("forward_before_place_distance_m").value))
-        speed_mps = abs(float(self.get_parameter("forward_before_place_speed_mps").value))
-        speed_mps = max(0.01, speed_mps)
-
-        duration_s = dist_m / speed_mps
-        self._forward_deadline = time.monotonic() + max(0.1, duration_s)
+        stop_hold_s = max(
+            0.0, float(self.get_parameter("forward_before_place_stop_hold_sec").value)
+        )
+        self._forward_stop_hold_deadline = time.monotonic() + stop_hold_s
         self._set_state(TestState.FORWARD_BEFORE_PLACE)
         self.get_logger().info(
-            f"FORWARD_BEFORE_PLACE: z trigger reached, cmd_vel forward {dist_m:.2f}m "
-            f"at {speed_mps:.2f}m/s (~{duration_s:.1f}s), then publish fixed place target."
+            "FORWARD_BEFORE_PLACE: z trigger reached, stop first then move forward 0.10m "
+            f"(stop hold {stop_hold_s:.2f}s)."
         )
 
     def _place_point_callback(self, msg: geometry_msgs.Point, color: str, topic: str):
@@ -284,6 +285,21 @@ class ModuleTestDockingNode(Node):
     def _visual_control_timer_cb(self):
         if self.current_state == TestState.FORWARD_BEFORE_PLACE:
             now = time.monotonic()
+            if self._forward_stop_hold_deadline is not None and now < self._forward_stop_hold_deadline:
+                self._stop_cmd_vel()
+                return
+
+            if self._forward_deadline is None:
+                dist_m = abs(float(self.get_parameter("forward_before_place_distance_m").value))
+                speed_mps = abs(float(self.get_parameter("forward_before_place_speed_mps").value))
+                speed_mps = max(0.01, speed_mps)
+                duration_s = dist_m / speed_mps
+                self._forward_deadline = now + max(0.1, duration_s)
+                self.get_logger().info(
+                    f"FORWARD_BEFORE_PLACE: start cmd_vel forward {dist_m:.2f}m at {speed_mps:.2f}m/s "
+                    f"(~{duration_s:.1f}s)."
+                )
+
             if self._forward_deadline is not None and now >= self._forward_deadline:
                 self._stop_cmd_vel()
                 self._place_target_point = geometry_msgs.Point(
