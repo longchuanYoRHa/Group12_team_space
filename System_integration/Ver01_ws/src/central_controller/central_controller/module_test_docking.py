@@ -37,6 +37,7 @@ class TestState(Enum):
     GRASP = "grasp"
     BACKUP_BEFORE_PLACE = "backup_before_place"
     PRECISION_ALIGN_PLACE = "precision_align_place"
+    FORWARD_BEFORE_PLACE = "forward_before_place"
     DONE = "done"
 
 
@@ -49,6 +50,7 @@ class ModuleTestDockingNode(Node):
         self._visual_place_last_point: Optional[geometry_msgs.Point] = None
         self._visual_align_deadline: Optional[float] = None
         self._backup_deadline: Optional[float] = None
+        self._forward_deadline: Optional[float] = None
 
         self.arm_status = "idle"
         self.gripper_status = "unknown"
@@ -71,6 +73,13 @@ class ModuleTestDockingNode(Node):
         self.declare_parameter("place_target_camera_z_tolerance_m", 0.01)
         self.declare_parameter("backup_before_place_distance_m", 0.50)
         self.declare_parameter("backup_before_place_speed_mps", 0.10)
+        self.declare_parameter("place_trigger_camera_z_m", 36.0)
+        self.declare_parameter("place_trigger_camera_z_tolerance", 0.5)
+        self.declare_parameter("forward_before_place_distance_m", 0.10)
+        self.declare_parameter("forward_before_place_speed_mps", 0.10)
+        self.declare_parameter("fixed_place_target_x", 0.0)
+        self.declare_parameter("fixed_place_target_y", 0.0)
+        self.declare_parameter("fixed_place_target_z", 27.5)
 
         self.state_pub = self.create_publisher(std_msgs.String, "module_test_docking/state", 10)
         self.cmd_vel_pub = self.create_publisher(geometry_msgs.Twist, "/cmd_vel", 10)
@@ -216,6 +225,7 @@ class ModuleTestDockingNode(Node):
         self._visual_place_last_point = None
         self._place_target_point = None
         self._backup_deadline = None
+        self._forward_deadline = None
         now = time.monotonic()
         timeout = float(self.get_parameter("visual_align_timeout_sec").value)
         self._visual_align_deadline = now + max(5.0, timeout)
@@ -230,6 +240,7 @@ class ModuleTestDockingNode(Node):
         self._visual_align_deadline = None
         self._visual_place_last_point = None
         self._place_target_point = None
+        self._forward_deadline = None
 
         dist_m = abs(float(self.get_parameter("backup_before_place_distance_m").value))
         speed_mps = abs(float(self.get_parameter("backup_before_place_speed_mps").value))
@@ -243,6 +254,23 @@ class ModuleTestDockingNode(Node):
             f"(~{duration_s:.1f}s), then enter PRECISION_ALIGN_PLACE."
         )
 
+    def _enter_forward_before_place_phase(self):
+        self._stop_cmd_vel()
+        self._visual_align_deadline = None
+        self._forward_deadline = None
+
+        dist_m = abs(float(self.get_parameter("forward_before_place_distance_m").value))
+        speed_mps = abs(float(self.get_parameter("forward_before_place_speed_mps").value))
+        speed_mps = max(0.01, speed_mps)
+
+        duration_s = dist_m / speed_mps
+        self._forward_deadline = time.monotonic() + max(0.1, duration_s)
+        self._set_state(TestState.FORWARD_BEFORE_PLACE)
+        self.get_logger().info(
+            f"FORWARD_BEFORE_PLACE: z trigger reached, cmd_vel forward {dist_m:.2f}m "
+            f"at {speed_mps:.2f}m/s (~{duration_s:.1f}s), then publish fixed place target."
+        )
+
     def _place_point_callback(self, msg: geometry_msgs.Point, color: str, topic: str):
         self._last_vision_msg_time = self.get_clock().now()
         if self.current_state != TestState.PRECISION_ALIGN_PLACE:
@@ -254,6 +282,29 @@ class ModuleTestDockingNode(Node):
         )
 
     def _visual_control_timer_cb(self):
+        if self.current_state == TestState.FORWARD_BEFORE_PLACE:
+            now = time.monotonic()
+            if self._forward_deadline is not None and now >= self._forward_deadline:
+                self._stop_cmd_vel()
+                self._place_target_point = geometry_msgs.Point(
+                    x=float(self.get_parameter("fixed_place_target_x").value),
+                    y=float(self.get_parameter("fixed_place_target_y").value),
+                    z=float(self.get_parameter("fixed_place_target_z").value),
+                )
+                self.get_logger().info(
+                    "FORWARD_BEFORE_PLACE: done -> publish fixed /arm/target_place."
+                )
+                self._publish_place_target_and_finish()
+                return
+
+            speed_mps = abs(float(self.get_parameter("forward_before_place_speed_mps").value))
+            speed_mps = max(0.01, speed_mps)
+            twist = geometry_msgs.Twist()
+            twist.linear.x = speed_mps
+            twist.angular.z = 0.0
+            self.cmd_vel_pub.publish(twist)
+            return
+
         if self.current_state == TestState.BACKUP_BEFORE_PLACE:
             now = time.monotonic()
             if self._backup_deadline is not None and now >= self._backup_deadline:
@@ -310,6 +361,13 @@ class ModuleTestDockingNode(Node):
         # Same as task_manager_v4_refactor/alignment.py _visual_docking_control_step
         x_error = -float(point.x)
         z_error = float(point.z) - target_z
+
+        if self.current_state == TestState.PRECISION_ALIGN_PLACE:
+            trigger_z = float(self.get_parameter("place_trigger_camera_z_m").value)
+            trigger_tol = abs(float(self.get_parameter("place_trigger_camera_z_tolerance").value))
+            if abs(float(point.z) - trigger_z) <= trigger_tol:
+                self._enter_forward_before_place_phase()
+                return
 
         aligned = (abs(x_error) <= x_tol) and (abs(z_error) <= z_tol)
         if aligned:
