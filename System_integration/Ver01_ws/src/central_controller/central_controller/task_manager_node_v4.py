@@ -14,6 +14,7 @@ Task manager state machine node V4.
 """
 
 import os
+import time
 
 import geometry_msgs.msg as geometry_msgs
 import nav2_msgs.action as nav2_msgs
@@ -323,6 +324,10 @@ class TaskManagerNodeV4(
 
 def main(args=None):
     rclpy.init(args=args)
+    rclpy.logging.get_logger("task_manager_v4").info(
+        "Startup delay enabled: waiting 30s before node starts."
+    )
+    time.sleep(30.0)
     node = TaskManagerNodeV4()
     try:
         rclpy.spin(node)

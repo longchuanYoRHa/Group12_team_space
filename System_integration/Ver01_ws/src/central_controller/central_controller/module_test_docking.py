@@ -419,6 +419,10 @@ class ModuleTestDockingNode(Node):
 
 def main(args=None):
     rclpy.init(args=args)
+    rclpy.logging.get_logger("module_test_docking").info(
+        "Startup delay enabled: waiting 30s before node starts."
+    )
+    time.sleep(30.0)
     node = ModuleTestDockingNode()
     try:
         rclpy.spin(node)
