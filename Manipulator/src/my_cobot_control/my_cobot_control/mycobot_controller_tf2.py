@@ -842,16 +842,14 @@ class MyCobotControllerTF2(Node):
 # Entry point
 # ---------------------------------------------------------------------------
 def main(args=None):
-    rclpy.init(args=args)
-    node = MyCobotControllerTF2()
     try:
+        rclpy.init(args=args)
+        node = MyCobotControllerTF2()
         rclpy.spin(node)
     except KeyboardInterrupt:
         pass
-    finally:
-        node.destroy_node()
-        rclpy.shutdown()
-
+    except Exception as e:
+        print(f'Error in main: {e}')
 
 if __name__ == '__main__':
     main()
