@@ -8,8 +8,11 @@ Docking module test (V4-style):
 - When |x| and |z - target| within tolerance -> publish /arm/target_pick (camera frame, m)
   and wait for arm/gripper status like before
 - After grasp success, enter place precision phase:
-  subscribe to /target_place/{red,green,blue} and align with same law; when aligned
-  publish /arm/target_place (camera frame, m)
+  subscribe to /target_place/{red,green,blue} and drive towards the camera-z
+  trigger value (place_trigger_camera_z_m, default 36). When |z - trigger| is
+  within tolerance, stop the chassis, briefly hold, then move forward
+  forward_before_place_distance_m (default 0.10 m) and publish a FIXED
+  /arm/target_place point (camera frame): (fixed_place_target_x/y/z).
 """
 
 from __future__ import annotations
@@ -52,6 +55,10 @@ class ModuleTestDockingNode(Node):
         self._backup_deadline: Optional[float] = None
         self._forward_deadline: Optional[float] = None
         self._forward_stop_hold_deadline: Optional[float] = None
+        self._forward_start_time: Optional[float] = None
+        self._forward_speed_mps: float = 0.0
+        self._forward_distance_m: float = 0.0
+        self._forward_last_log_time: Optional[float] = None
 
         self.arm_status = "idle"
         self.gripper_status = "unknown"
@@ -70,8 +77,6 @@ class ModuleTestDockingNode(Node):
         self.declare_parameter("visual_docking_x_tolerance_m", 0.05)
         self.declare_parameter("grasp_target_camera_z_m", 0.265)
         self.declare_parameter("grasp_target_camera_z_tolerance_m", 0.01)
-        self.declare_parameter("place_target_camera_z_m", 0.265)
-        self.declare_parameter("place_target_camera_z_tolerance_m", 0.01)
         self.declare_parameter("backup_before_place_distance_m", 0.50)
         self.declare_parameter("backup_before_place_speed_mps", 0.10)
         self.declare_parameter("place_trigger_camera_z_m", 36.0)
@@ -261,6 +266,8 @@ class ModuleTestDockingNode(Node):
         self._visual_align_deadline = None
         self._forward_deadline = None
         self._forward_stop_hold_deadline = None
+        self._forward_start_time = None
+        self._forward_last_log_time = None
 
         stop_hold_s = max(
             0.0, float(self.get_parameter("forward_before_place_stop_hold_sec").value)
@@ -295,6 +302,10 @@ class ModuleTestDockingNode(Node):
                 speed_mps = max(0.01, speed_mps)
                 duration_s = dist_m / speed_mps
                 self._forward_deadline = now + max(0.1, duration_s)
+                self._forward_start_time = now
+                self._forward_speed_mps = speed_mps
+                self._forward_distance_m = dist_m
+                self._forward_last_log_time = None
                 self.get_logger().info(
                     f"FORWARD_BEFORE_PLACE: start cmd_vel forward {dist_m:.2f}m at {speed_mps:.2f}m/s "
                     f"(~{duration_s:.1f}s)."
@@ -302,6 +313,17 @@ class ModuleTestDockingNode(Node):
 
             if self._forward_deadline is not None and now >= self._forward_deadline:
                 self._stop_cmd_vel()
+                if self._forward_start_time is not None:
+                    elapsed = now - self._forward_start_time
+                    est_dist = min(
+                        self._forward_distance_m, elapsed * self._forward_speed_mps
+                    )
+                    self.get_logger().info(
+                        f"FORWARD_BEFORE_PLACE: reached target, elapsed={elapsed:.2f}s, "
+                        f"est_distance={est_dist:.3f}m / {self._forward_distance_m:.3f}m -> STOP."
+                    )
+                self._forward_start_time = None
+                self._forward_last_log_time = None
                 self._place_target_point = geometry_msgs.Point(
                     x=float(self.get_parameter("fixed_place_target_x").value),
                     y=float(self.get_parameter("fixed_place_target_y").value),
@@ -313,12 +335,24 @@ class ModuleTestDockingNode(Node):
                 self._publish_place_target_and_finish()
                 return
 
-            speed_mps = abs(float(self.get_parameter("forward_before_place_speed_mps").value))
-            speed_mps = max(0.01, speed_mps)
+            speed_mps = self._forward_speed_mps
             twist = geometry_msgs.Twist()
             twist.linear.x = speed_mps
             twist.angular.z = 0.0
             self.cmd_vel_pub.publish(twist)
+
+            if self._forward_start_time is not None:
+                elapsed = now - self._forward_start_time
+                est_dist = min(self._forward_distance_m, elapsed * speed_mps)
+                if (
+                    self._forward_last_log_time is None
+                    or (now - self._forward_last_log_time) >= 0.2
+                ):
+                    self._forward_last_log_time = now
+                    self.get_logger().info(
+                        f"FORWARD_BEFORE_PLACE: progress elapsed={elapsed:.2f}s, "
+                        f"est_distance={est_dist:.3f}m / {self._forward_distance_m:.3f}m."
+                    )
             return
 
         if self.current_state == TestState.BACKUP_BEFORE_PLACE:
@@ -364,8 +398,10 @@ class ModuleTestDockingNode(Node):
             target_z = float(self.get_parameter("grasp_target_camera_z_m").value)
             z_tol = abs(float(self.get_parameter("grasp_target_camera_z_tolerance_m").value))
         else:
-            target_z = float(self.get_parameter("place_target_camera_z_m").value)
-            z_tol = abs(float(self.get_parameter("place_target_camera_z_tolerance_m").value))
+            # Place state ONLY uses the z trigger (default 36) to switch to
+            # FORWARD_BEFORE_PLACE; no other branch may publish /arm/target_place.
+            target_z = float(self.get_parameter("place_trigger_camera_z_m").value)
+            z_tol = abs(float(self.get_parameter("place_trigger_camera_z_tolerance").value))
         x_tol = abs(float(self.get_parameter("visual_docking_x_tolerance_m").value))
 
         max_w = abs(float(self.get_parameter("docking_angular_speed_max_rps").value))
@@ -379,33 +415,31 @@ class ModuleTestDockingNode(Node):
         z_error = float(point.z) - target_z
 
         if self.current_state == TestState.PRECISION_ALIGN_PLACE:
-            trigger_z = float(self.get_parameter("place_trigger_camera_z_m").value)
-            trigger_tol = abs(float(self.get_parameter("place_trigger_camera_z_tolerance").value))
-            if abs(float(point.z) - trigger_z) <= trigger_tol:
+            if abs(z_error) <= z_tol:
+                self.get_logger().info(
+                    f"PRECISION_ALIGN_PLACE: z trigger reached "
+                    f"(point.z={float(point.z):.3f}, target={target_z:.3f}) -> FORWARD_BEFORE_PLACE."
+                )
                 self._enter_forward_before_place_phase()
                 return
+
+            twist = geometry_msgs.Twist()
+            twist.angular.z = _clamp(kp_x * x_error, -max_w, max_w)
+            twist.linear.x = _clamp(kp_z * z_error, -max_v, max_v)
+            self.cmd_vel_pub.publish(twist)
+            return
 
         aligned = (abs(x_error) <= x_tol) and (abs(z_error) <= z_tol)
         if aligned:
             self._stop_cmd_vel()
-            if self.current_state == TestState.PRECISION_ALIGN_PICK:
-                self._grasp_target_point = geometry_msgs.Point(
-                    x=point.x, y=point.y, z=point.z
-                )
-                self.get_logger().info(
-                    "PRECISION_ALIGN_PICK: aligned within tolerance -> GRASP "
-                    f"(|x_err|={abs(x_error):.4f}, |z_err|={abs(z_error):.4f})."
-                )
-                self._enter_grasp_state()
-            else:
-                self._place_target_point = geometry_msgs.Point(
-                    x=point.x, y=point.y, z=point.z
-                )
-                self.get_logger().info(
-                    "PRECISION_ALIGN_PLACE: aligned within tolerance -> publish /arm/target_place "
-                    f"(|x_err|={abs(x_error):.4f}, |z_err|={abs(z_error):.4f})."
-                )
-                self._publish_place_target_and_finish()
+            self._grasp_target_point = geometry_msgs.Point(
+                x=point.x, y=point.y, z=point.z
+            )
+            self.get_logger().info(
+                "PRECISION_ALIGN_PICK: aligned within tolerance -> GRASP "
+                f"(|x_err|={abs(x_error):.4f}, |z_err|={abs(z_error):.4f})."
+            )
+            self._enter_grasp_state()
             return
 
         twist = geometry_msgs.Twist()
