@@ -319,7 +319,8 @@ class ModuleTestDockingNode(Node):
                         self._forward_distance_m, elapsed * self._forward_speed_mps
                     )
                     self.get_logger().info(
-                        f"FORWARD_BEFORE_PLACE: reached target, elapsed={elapsed:.2f}s, "
+                        f"FORWARD_BEFORE_PLACE: reached target, "
+                        f"t={elapsed:.2f}s, v={self._forward_speed_mps:.3f}m/s (cmd=0.000m/s now), "
                         f"est_distance={est_dist:.3f}m / {self._forward_distance_m:.3f}m -> STOP."
                     )
                 self._forward_start_time = None
@@ -350,7 +351,8 @@ class ModuleTestDockingNode(Node):
                 ):
                     self._forward_last_log_time = now
                     self.get_logger().info(
-                        f"FORWARD_BEFORE_PLACE: progress elapsed={elapsed:.2f}s, "
+                        f"FORWARD_BEFORE_PLACE: progress "
+                        f"t={elapsed:.2f}s, v={speed_mps:.3f}m/s, "
                         f"est_distance={est_dist:.3f}m / {self._forward_distance_m:.3f}m."
                     )
             return
