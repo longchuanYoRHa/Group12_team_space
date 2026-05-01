@@ -155,7 +155,16 @@ def generate_launch_description():
             '    echo "ERROR: navigate_to_pose not available"; exit 1; '
             '  fi; '
             'done; '
-            'echo "navigate_to_pose action server is available"',
+            'echo "navigate_to_pose action server is available"; '
+            'echo "Precheck: sending 0.1m forward nav goal (frame=base_link) until accepted..."; '
+            'GOAL="{pose: {header: {frame_id: base_link}, pose: {position: {x: 0.1, y: 0.0, z: 0.0}, orientation: {z: 0.0, w: 1.0}}}}"; '
+            'attempt=0; '
+            'until timeout 6 ros2 action send_goal /navigate_to_pose nav2_msgs/action/NavigateToPose "$GOAL" 2>/dev/null | grep -Eiq "goal accepted|accepted"; do '
+            '  attempt=$((attempt+1)); '
+            '  echo "Precheck nav goal not accepted yet, retry #$attempt ..."; '
+            '  sleep 1; '
+            'done; '
+            'echo "Precheck nav goal accepted. Continue launching module test."',
         ],
         output='screen',
     )

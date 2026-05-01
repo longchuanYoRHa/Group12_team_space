@@ -330,6 +330,11 @@ class ModuleTestExploreApproachNode(Node):
 
 def main(args=None):
     rclpy.init(args=args)
+    startup_logger = rclpy.logging.get_logger("module_test_explore_approach")
+    startup_logger.info("Startup delay enabled: countdown 30s before node starts.")
+    for remaining in range(10, 0, -1):
+        startup_logger.info(f"Node starts in {remaining:02d}s...")
+        time.sleep(1.0)
     node = ModuleTestExploreApproachNode()
     try:
         rclpy.spin(node)

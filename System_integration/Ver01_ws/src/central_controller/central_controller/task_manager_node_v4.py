@@ -324,10 +324,11 @@ class TaskManagerNodeV4(
 
 def main(args=None):
     rclpy.init(args=args)
-    rclpy.logging.get_logger("task_manager_v4").info(
-        "Startup delay enabled: waiting 30s before node starts."
-    )
-    time.sleep(30.0)
+    startup_logger = rclpy.logging.get_logger("task_manager_v4")
+    startup_logger.info("Startup delay enabled: countdown 30s before node starts.")
+    for remaining in range(10, 0, -1):
+        startup_logger.info(f"Node starts in {remaining:02d}s...")
+        time.sleep(1.0)
     node = TaskManagerNodeV4()
     try:
         rclpy.spin(node)

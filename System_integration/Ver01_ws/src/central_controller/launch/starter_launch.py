@@ -204,7 +204,17 @@ def generate_launch_description():
              '    echo "[wait-nav2] ERROR: lifecycle_manager_navigation never reported active"; exit 1; '
              '  fi; '
              'done; '
-             'echo "[wait-nav2] Phase 3 done: Nav2 fully active (managed nodes are active)."'],
+             'echo "[wait-nav2] Phase 3 done: Nav2 fully active (managed nodes are active)."; '
+             # Phase 4: send a short forward nav goal and wait until Nav2 accepts it
+             'echo "[wait-nav2] Phase 4/4: sending 0.1m forward nav goal (frame=base_link) until accepted..."; '
+             'GOAL="{pose: {header: {frame_id: base_link}, pose: {position: {x: 0.1, y: 0.0, z: 0.0}, orientation: {z: 0.0, w: 1.0}}}}"; '
+             'attempt=0; '
+             'until timeout 6 ros2 action send_goal /navigate_to_pose nav2_msgs/action/NavigateToPose "$GOAL" 2>/dev/null | grep -Eiq "goal accepted|accepted"; do '
+             '  attempt=$((attempt+1)); '
+             '  echo "[wait-nav2] Phase 4: nav goal not accepted yet, retry #$attempt ..."; '
+             '  sleep $TICK; '
+             'done; '
+             'echo "[wait-nav2] Phase 4 done: precheck nav goal accepted."'],
         output='screen'
     )
 
