@@ -1,5 +1,3 @@
----
-
 # 🚀 NUC Power Management: Permanent Deployment
 
 This configuration permanently locks the NUC's CPU power consumption. This is a critical safety requirement to ensure that the combined draw of the YOLO model, Lidar SLAM, and the Manipulator Arm does not exceed the Rover battery's BMS trip point.
@@ -8,8 +6,6 @@ This configuration permanently locks the NUC's CPU power consumption. This is a 
 *   **Mode:** Turbo Boost Disabled (Prevents transient current spikes).
 *   **PL1 (Sustained):** 35 Watts (Target for long-duration mission stability).
 *   **PL2 (Peak/Burst):** 45 Watts (Max allowance for short-term processing spikes).
-
----
 
 ## 🛠️ Installation Instructions
 
