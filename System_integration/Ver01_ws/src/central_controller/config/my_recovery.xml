@@ -50,8 +50,9 @@
               <ClearEntireCostmap name="ClearGlobalCostmap-Subtree" service_name="global_costmap/clear_entirely_global_costmap"/>
             </Sequence>
             <BackUp backup_dist="0.20" backup_speed="0.05" error_code_id="{backup_code_id}"/>
-            <Wait wait_duration="2.0"/>
             <Spin spin_dist="0.5" error_code_id="{spin_error_code}"/>
+            <Wait wait_duration="2.0"/>
+            
           </RoundRobin>
         </ReactiveFallback>
       </Sequence>

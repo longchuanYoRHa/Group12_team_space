@@ -20,6 +20,7 @@ class TaskState(Enum):
     GRASP = "grasp"
     RESUME_EXPLORE_FOR_BIN = "resume_explore_for_bin"
     NAV_TO_BIN_PREPLACE = "nav_to_bin_preplace"
+    FORWARD_BEFORE_PLACE = "forward_before_place"
     PLACE_IN_BIN = "place_in_bin"
     BACKUP_AFTER_ACTION = "backup_after_action"
     POST_ACTION = "post_action"

@@ -219,7 +219,7 @@ class TaskManagerExplorationMixin:
             return
 
         if self.state == TaskState.PLACE_IN_BIN and self.cargo_state == CargoState.HAS_OBJECT:
-            self._execute_place_with_current_bin()
+            # Place command is now issued only by FORWARD_BEFORE_PLACE fixed target logic.
             return
 
         if self.state == TaskState.PRECISION_ALIGN:

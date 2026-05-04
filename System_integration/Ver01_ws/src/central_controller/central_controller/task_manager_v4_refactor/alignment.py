@@ -1,12 +1,9 @@
 from __future__ import annotations
 
-import math
 import time
 
 import geometry_msgs.msg as geometry_msgs
 
-from central_controller.task_manager_utils import quaternion_from_yaw
-from central_controller.task_manager_v4_refactor.docking import DockRobot
 from central_controller.task_manager_v4_refactor.models import CargoState, NavPurpose, TaskState
 
 
@@ -17,8 +14,8 @@ def _clamp(value: float, low: float, high: float) -> float:
 class TaskManagerAlignmentMixin:
     """
     V4 precision align:
-    - 对 object：纯视觉伺服（camera frame 下 x 偏移 -> 角速度；z 与 0.265 的误差 -> 线速度）
-    - 对 bin：沿用 V3 的 DockRobot action 方式（不改原放置流程）
+    - 对 object：纯视觉伺服（camera frame 下 x 偏移 -> 角速度；z 与目标抓取 z 的误差 -> 线速度）
+    - 对 bin：纯视觉伺服到放置触发 z，随后前进固定距离并发布固定放置点
     """
 
     def _enter_precision_align(self, source_purpose: NavPurpose, next_state_after_align):
@@ -26,75 +23,20 @@ class TaskManagerAlignmentMixin:
         self._precision_align_source_purpose = source_purpose
         self._precision_align_next_state = next_state_after_align
 
-        # DockRobot path (bin alignment)
-        self._dock_goal_sent = False
-        self._dock_goal_handle = None
-        self._dock_result_future = None
-
-        # Visual servo path (object alignment)
+        # Visual servo path (object/bin alignment)
         self._visual_docking_active = False
         self._visual_docking_last_point = None  # geometry_msgs.Point in camera frame
         self._visual_docking_start_time = None
+        self._forward_stop_hold_deadline = None
+        self._forward_deadline = None
+        self._forward_start_time = None
+        self._forward_speed_mps = 0.0
+        self._forward_distance_m = 0.0
 
         self.wait_at_point_start_time = time.monotonic()
         self.get_logger().info(
             f"Entered PRECISION_ALIGN (source={source_purpose.value}); waiting for vision trigger."
         )
-
-    def _build_dock_target_pose_from_vision(
-        self,
-        point_msg: geometry_msgs.Point,
-        *,
-        stop_dist: float | None = None,
-        robot_delta: float | None = None,
-    ):
-        cube_pose_odom = self._point_to_pose_stamped_in_frame(point_msg, "map")
-        robot_x, robot_y = self._get_robot_xy_in_frame("map")
-        cx = cube_pose_odom.pose.position.x
-        cy = cube_pose_odom.pose.position.y
-        dx = cx - robot_x
-        dy = cy - robot_y
-        dist = math.hypot(dx, dy)
-        if dist < 1e-6:
-            raise RuntimeError("invalid cube distance")
-
-        ux = dx / dist
-        uy = dy / dist
-        if robot_delta is not None:
-            tx = robot_x + ux * robot_delta
-            ty = robot_y + uy * robot_delta
-        else:
-            if stop_dist is None:
-                raise RuntimeError("stop_dist or robot_delta must be provided")
-            tx = cx - ux * stop_dist
-            ty = cy - uy * stop_dist
-
-        target_pose = geometry_msgs.PoseStamped()
-        target_pose.header.frame_id = "map"
-        target_pose.header.stamp = self.get_clock().now().to_msg()
-        target_pose.pose.position.x = tx
-        target_pose.pose.position.y = ty
-        target_pose.pose.position.z = 0.0
-        target_pose.pose.orientation = quaternion_from_yaw(math.atan2(cy - ty, cx - tx))
-        return target_pose, dist, (tx, ty)
-
-    def _send_dock_goal(self, target_pose: geometry_msgs.PoseStamped, log_reason: str):
-        self.get_logger().info(
-            "PRECISION_ALIGN(bin): sending DockRobot goal "
-            f"({log_reason}, target=({target_pose.pose.position.x:.3f},"
-            f"{target_pose.pose.position.y:.3f}) map)."
-        )
-
-        goal = DockRobot.Goal()
-        goal.use_dock_id = False
-        goal.dock_pose = target_pose
-        goal.dock_type = self.get_parameter("dock_type").value
-        goal.navigate_to_staging_pose = False
-        goal.max_staging_time = 0.0
-
-        send_goal_future = self.dock_client.send_goal_async(goal)
-        send_goal_future.add_done_callback(self._dock_goal_response_callback)
-        self._dock_goal_sent = True
 
     def _handle_precision_align_timeout_if_needed(self):
         if self._precision_align_source_purpose != NavPurpose.INTEREST_POINT:
@@ -120,10 +62,6 @@ class TaskManagerAlignmentMixin:
         self._visual_docking_active = False
         self._visual_docking_last_point = None
 
-        self._dock_goal_sent = False
-        self._dock_goal_handle = None
-        self._dock_result_future = None
-
         self.interest_point_index += 1
         self.current_interest_point = None
         self.wait_at_point_start_time = None
@@ -143,99 +81,29 @@ class TaskManagerAlignmentMixin:
                 TaskState.GRASP if is_object else TaskState.PLACE_IN_BIN
             )
 
-        if is_object:
-            # Pure visual guidance for object docking.
-            if self._visual_docking_start_time is None:
-                self._visual_docking_start_time = time.monotonic()
-            self._visual_docking_last_point = point_msg
-            self._visual_docking_active = True
-            return
-
-        # Bin placement keeps DockRobot.
-        if self._dock_goal_sent:
-            return
-        if self.dock_client is None:
-            return
-        if not self.dock_client.wait_for_server(timeout_sec=0.2):
-            self.get_logger().warn("PRECISION_ALIGN(bin): DockRobot action server not ready yet.")
-            return
-
-        stop_dist = max(0.0, float(self.get_parameter("docking_stop_distance_m").value))
-        try:
-            target_pose, _, _ = self._build_dock_target_pose_from_vision(
-                point_msg,
-                stop_dist=stop_dist,
-            )
-        except Exception as exc:
-            self.get_logger().error(f"PRECISION_ALIGN(bin): build DockRobot goal failed: {exc}")
-            return
-
-        self._send_dock_goal(target_pose, f"stop_dist={stop_dist:.3f} m")
-
-    def _dock_goal_response_callback(self, future):
-        try:
-            goal_handle = future.result()
-        except Exception as exc:
-            self.get_logger().error(f"DockRobot goal response error: {exc}")
-            self._dock_goal_sent = False
-            return
-
-        if not goal_handle.accepted:
-            self.get_logger().warn("DockRobot goal rejected.")
-            self._dock_goal_sent = False
-            return
-
-        self.get_logger().info("DockRobot goal accepted.")
-        self._dock_goal_handle = goal_handle
-        self._dock_result_future = goal_handle.get_result_async()
+        if self._visual_docking_start_time is None:
+            self._visual_docking_start_time = time.monotonic()
+        self._visual_docking_last_point = point_msg
+        self._visual_docking_active = True
 
     def _precision_align_control_step(self):
-        # Object: visual servo loop.
         if getattr(self, "_visual_docking_active", False):
             self._visual_docking_control_step()
-            return
-
-        # Bin: DockRobot result handling.
-        if not self._dock_goal_sent or self._dock_result_future is None:
-            return
-        if not self._dock_result_future.done():
-            return
-
-        try:
-            result = self._dock_result_future.result().result
-        except Exception as exc:
-            self.get_logger().error(f"PRECISION_ALIGN(bin): DockRobot result error: {exc}")
-            self._dock_goal_sent = False
-            self._dock_goal_handle = None
-            self._dock_result_future = None
-            return
-
-        if result.success:
-            self.get_logger().info("PRECISION_ALIGN(bin): DockRobot succeeded.")
-            if self._precision_align_next_state is not None:
-                self.state = self._precision_align_next_state
-                self._arm_cmd_sent = False
-            else:
-                self.get_logger().warn(
-                    "PRECISION_ALIGN(bin): next state is None; staying in PRECISION_ALIGN."
-                )
-        else:
-            self.get_logger().warn(
-                f"PRECISION_ALIGN(bin): DockRobot failed (error_code={result.error_code})."
-            )
-
-        self._dock_goal_sent = False
-        self._dock_goal_handle = None
-        self._dock_result_future = None
 
     def _visual_docking_control_step(self) -> None:
         point = self._visual_docking_last_point
         if point is None:
             return
 
-        target_z = float(self.get_parameter("grasp_target_camera_z_m").value)
-        z_tol = abs(float(self.get_parameter("grasp_target_camera_z_tolerance_m").value))
         x_tol = abs(float(self.get_parameter("visual_docking_x_tolerance_m").value))
+        is_place_align = self._precision_align_next_state == TaskState.PLACE_IN_BIN
+
+        if is_place_align:
+            target_z = float(self.get_parameter("place_trigger_camera_z_m").value)
+            z_tol = abs(float(self.get_parameter("place_trigger_camera_z_tolerance").value))
+        else:
+            target_z = float(self.get_parameter("grasp_target_camera_z_m").value)
+            z_tol = abs(float(self.get_parameter("grasp_target_camera_z_tolerance_m").value))
 
         max_w = abs(float(self.get_parameter("docking_angular_speed_max_rps").value))
         max_v = abs(float(self.get_parameter("docking_linear_speed_mps").value))
@@ -246,8 +114,15 @@ class TaskManagerAlignmentMixin:
         x_error = -float(point.x)
         z_error = float(point.z) - target_z
 
+        if is_place_align and abs(z_error) <= z_tol:
+            self._stop_cmd_vel()
+            self._visual_docking_active = False
+            self._visual_docking_last_point = None
+            self._enter_forward_before_place_phase()
+            return
+
         aligned = (abs(x_error) <= x_tol) and (abs(z_error) <= z_tol)
-        if aligned:
+        if (not is_place_align) and aligned:
             self._stop_cmd_vel()
             self._visual_docking_active = False
             self._visual_docking_last_point = None
@@ -261,6 +136,52 @@ class TaskManagerAlignmentMixin:
         twist = geometry_msgs.Twist()
         twist.angular.z = _clamp(kp_x * x_error, -max_w, max_w)
         twist.linear.x = _clamp(kp_z * z_error, -max_v, max_v)
+        self.cmd_vel_pub.publish(twist)
+
+    def _enter_forward_before_place_phase(self):
+        stop_hold_s = max(
+            0.0, float(self.get_parameter("forward_before_place_stop_hold_sec").value)
+        )
+        self._forward_stop_hold_deadline = time.monotonic() + stop_hold_s
+        self._forward_deadline = None
+        self._forward_start_time = None
+        self._forward_speed_mps = 0.0
+        self._forward_distance_m = 0.0
+        self.state = TaskState.FORWARD_BEFORE_PLACE
+        self.get_logger().info(
+            "PRECISION_ALIGN_PLACE: z trigger reached, entering FORWARD_BEFORE_PLACE."
+        )
+
+    def _forward_before_place_control_step(self):
+        now = time.monotonic()
+        if self._forward_stop_hold_deadline is not None and now < self._forward_stop_hold_deadline:
+            self._stop_cmd_vel()
+            return
+
+        if self._forward_deadline is None:
+            dist_m = abs(float(self.get_parameter("forward_before_place_distance_m").value))
+            speed_mps = abs(float(self.get_parameter("forward_before_place_speed_mps").value))
+            speed_mps = max(0.01, speed_mps)
+            duration_s = dist_m / speed_mps
+            self._forward_deadline = now + max(0.1, duration_s)
+            self._forward_start_time = now
+            self._forward_speed_mps = speed_mps
+            self._forward_distance_m = dist_m
+            self.get_logger().info(
+                f"FORWARD_BEFORE_PLACE: start cmd_vel forward {dist_m:.2f}m at {speed_mps:.2f}m/s."
+            )
+
+        if self._forward_deadline is not None and now >= self._forward_deadline:
+            self._stop_cmd_vel()
+            self._forward_stop_hold_deadline = None
+            self._forward_deadline = None
+            self._forward_start_time = None
+            self._execute_place_with_fixed_target()
+            return
+
+        twist = geometry_msgs.Twist()
+        twist.linear.x = self._forward_speed_mps
+        twist.angular.z = 0.0
         self.cmd_vel_pub.publish(twist)
 
     def _start_backup_after_action(

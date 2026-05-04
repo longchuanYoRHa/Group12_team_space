@@ -143,3 +143,20 @@ class TaskManagerArmMixin:
         self.arm_place_pub.publish(target_pt)
         self._arm_cmd_sent = True
 
+    def _execute_place_with_fixed_target(self):
+        if self._arm_cmd_sent:
+            return
+
+        target_pt = geometry_msgs.Point()
+        target_pt.x = float(self.get_parameter("fixed_place_target_x").value)
+        target_pt.y = float(self.get_parameter("fixed_place_target_y").value)
+        target_pt.z = float(self.get_parameter("fixed_place_target_z").value)
+
+        self.get_logger().info(
+            "FORWARD_BEFORE_PLACE done: sending fixed place target "
+            "to manipulator (/arm/target_place)."
+        )
+        self.arm_place_pub.publish(target_pt)
+        self._arm_cmd_sent = True
+        self.state = TaskState.PLACE_IN_BIN
+

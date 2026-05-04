@@ -30,10 +30,6 @@ from central_controller.detect_objects_in_pgm_map import DEFAULT_ORIGIN, DEFAULT
 from central_controller.detection_map_coordinates_csv import DetectionMapCoordinatesCsvLogger
 from central_controller.task_manager_v4_refactor.alignment import TaskManagerAlignmentMixin
 from central_controller.task_manager_v4_refactor.arm import TaskManagerArmMixin
-from central_controller.task_manager_v4_refactor.docking import (
-    DOCKROBOT_IMPORT_ERROR,
-    DockRobot,
-)
 from central_controller.task_manager_v4_refactor.exploration import (
     TaskManagerExplorationMixin,
 )
@@ -124,26 +120,6 @@ class TaskManagerNodeV4(
         self.nav2_goal_handle = None
         self.current_nav_purpose = NavPurpose.NONE
 
-        self.declare_parameter("dock_action_name", "dock_robot")
-        self.declare_parameter("dock_type", "simple_non_charging_dock")
-        self.dock_client = None
-        if DockRobot is None:
-            self.get_logger().warn(
-                "DockRobot action type not importable in this environment. "
-                "This environment should provide it from `nav2_msgs.action` "
-                "or older setups from `opennav_docking_msgs.action`. "
-                f"Original error: {DOCKROBOT_IMPORT_ERROR}. "
-                "Docking via DockRobot will be unavailable."
-            )
-        else:
-            self.dock_client = ActionClient(
-                self,
-                DockRobot,
-                self.get_parameter("dock_action_name").value,
-            )
-        self._dock_goal_handle = None
-        self._dock_result_future = None
-
     def _setup_publishers(self) -> None:
         self.explore_control_pub = self.create_publisher(std_msgs.Bool, "explore/resume", 10)
         self.state_pub = self.create_publisher(std_msgs.String, "task_manager/state", 10)
@@ -216,7 +192,6 @@ class TaskManagerNodeV4(
 
         self.declare_parameter("docking_linear_speed_mps", 0.08)
         self.declare_parameter("docking_angular_speed_max_rps", 0.25)
-        self.declare_parameter("docking_stop_distance_m", 0.265)
 
         # Visual docking (object)
         self.declare_parameter("visual_docking_x_kp", 1.5)
@@ -226,6 +201,14 @@ class TaskManagerNodeV4(
         # Grasp decision threshold (distance in camera z)
         self.declare_parameter("grasp_target_camera_z_m", 0.265)
         self.declare_parameter("grasp_target_camera_z_tolerance_m", 0.01)
+        self.declare_parameter("place_trigger_camera_z_m", 0.36)
+        self.declare_parameter("place_trigger_camera_z_tolerance", 0.5)
+        self.declare_parameter("forward_before_place_distance_m", 0.10)
+        self.declare_parameter("forward_before_place_speed_mps", 0.10)
+        self.declare_parameter("forward_before_place_stop_hold_sec", 0.2)
+        self.declare_parameter("fixed_place_target_x", 0.0)
+        self.declare_parameter("fixed_place_target_y", 0.0)
+        self.declare_parameter("fixed_place_target_z", 0.275)
 
         self.declare_parameter("backup_distance_m", 0.20)
         self.declare_parameter("pre_explore_spin_enable", True)
@@ -258,13 +241,15 @@ class TaskManagerNodeV4(
     def _setup_precision_align_state(self) -> None:
         self._precision_align_source_purpose = NavPurpose.NONE
         self._precision_align_next_state = None
-        self._dock_goal_sent = False
-        self._dock_goal_handle = None
-        self._dock_result_future = None
 
         self._visual_docking_active = False
         self._visual_docking_last_point = None
         self._visual_docking_start_time = None
+        self._forward_stop_hold_deadline = None
+        self._forward_deadline = None
+        self._forward_start_time = None
+        self._forward_speed_mps = 0.0
+        self._forward_distance_m = 0.0
 
         self._backup_end_time = None
         self._backup_next_state = None
@@ -315,6 +300,8 @@ class TaskManagerNodeV4(
         elif self.state == TaskState.PRECISION_ALIGN:
             self._precision_align_control_step()
             self._handle_precision_align_timeout_if_needed()
+        elif self.state == TaskState.FORWARD_BEFORE_PLACE:
+            self._forward_before_place_control_step()
         elif self.state == TaskState.BACKUP_AFTER_ACTION:
             self._backup_control_step()
 
