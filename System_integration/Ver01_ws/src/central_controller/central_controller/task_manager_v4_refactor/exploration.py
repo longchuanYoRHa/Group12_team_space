@@ -254,15 +254,15 @@ class TaskManagerExplorationMixin:
         self.get_logger().info(
             f"Bin found during RESUME_EXPLORE_FOR_BIN, "
             f"coords=({pose_stamped.pose.position.x:.2f}, "
-            f"{pose_stamped.pose.position.y:.2f}), stopping explore and nav to bin preplace."
+            f"{pose_stamped.pose.position.y:.2f}), stopping explore and entering visual align."
         )
         self._publish_explore_resume_if_changed(False)
         self._cancel_nav2_goal_if_any()
-        self._send_bin_preplace_goal(
-            pose_stamped,
-            color=color,
-            source="vision",
+        self._enter_precision_align(
+            NavPurpose.BIN_PREPLACE,
+            next_state_after_align=TaskState.PLACE_IN_BIN,
         )
+        self._handle_precision_align_vision(point_msg=msg, is_object=False)
 
     def _bin_point_callback(self, msg: geometry_msgs.Point, color: str):
         self.dispatch(BinVisionEvent(color, msg))
