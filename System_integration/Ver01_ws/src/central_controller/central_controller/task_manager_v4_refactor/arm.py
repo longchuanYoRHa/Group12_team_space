@@ -55,12 +55,25 @@ class TaskManagerArmMixin:
                 )
 
     def _handle_place_arm_result(self):
+        if (
+            not self._place_status_changed_after_command
+            and self.arm_status != self._place_status_at_command
+        ):
+            self._place_status_changed_after_command = True
+
         if self.arm_status == "idle":
+            if (
+                self._place_status_at_command == "idle"
+                and not self._place_status_changed_after_command
+            ):
+                return
             self.get_logger().info("Place succeeded!")
             self.cargo_state = CargoState.EMPTY
             self.place_retry_count = 0
             self.adjust_nav2_for_carry_mode(False)
             self._arm_cmd_sent = False
+            self._place_status_at_command = "unknown"
+            self._place_status_changed_after_command = False
             if self.bin_pose is not None:
                 self.bin_blacklist.append(self.bin_pose.pose.position)
             if self.explore_done_flag:
@@ -78,6 +91,8 @@ class TaskManagerArmMixin:
         if self.arm_status == "error":
             self.place_retry_count += 1
             self._arm_cmd_sent = False
+            self._place_status_at_command = "unknown"
+            self._place_status_changed_after_command = False
             if self.place_retry_count >= self.max_place_retries:
                 self.get_logger().warn(
                     "Place failed, max retries reached, resuming explore for bin"
@@ -141,6 +156,8 @@ class TaskManagerArmMixin:
             f"in {self.get_parameter('camera_frame_id').value} frame."
         )
         self.arm_place_pub.publish(target_pt)
+        self._place_status_at_command = self.arm_status
+        self._place_status_changed_after_command = False
         self._arm_cmd_sent = True
 
     def _execute_place_with_fixed_target(self):
@@ -157,6 +174,8 @@ class TaskManagerArmMixin:
             "to manipulator (/arm/target_place)."
         )
         self.arm_place_pub.publish(target_pt)
+        self._place_status_at_command = self.arm_status
+        self._place_status_changed_after_command = False
         self._arm_cmd_sent = True
         self.state = TaskState.PLACE_IN_BIN
 

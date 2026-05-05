@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Docking module test (V4-style):
-- Startup: optional /reset_odometry (skipped when use_sim_time=true, same as before)
+- Startup: enter visual precision phase immediately
 - Enter visual precision phase immediately (no DockRobot)
 - Subscribe to /target_pick/{red,green,blue}; on each message update camera-frame point
 - 10 Hz timer applies the same cmd_vel law as task_manager_v4_refactor/alignment.py
@@ -27,7 +27,6 @@ from rclpy.qos import qos_profile_sensor_data
 import tf2_ros
 import geometry_msgs.msg as geometry_msgs
 import std_msgs.msg as std_msgs
-from std_srvs.srv import Trigger
 
 
 def _clamp(value: float, low: float, high: float) -> float:
@@ -41,6 +40,8 @@ class TestState(Enum):
     BACKUP_BEFORE_PLACE = "backup_before_place"
     PRECISION_ALIGN_PLACE = "precision_align_place"
     FORWARD_BEFORE_PLACE = "forward_before_place"
+    PLACE = "place"
+    BACKUP_AFTER_PLACE = "backup_after_place"
     DONE = "done"
 
 
@@ -80,13 +81,15 @@ class ModuleTestDockingNode(Node):
         self.declare_parameter("backup_before_place_distance_m", 0.50)
         self.declare_parameter("backup_before_place_speed_mps", 0.10)
         self.declare_parameter("place_trigger_camera_z_m", 0.36)
-        self.declare_parameter("place_trigger_camera_z_tolerance", 0.5)
+        self.declare_parameter("place_trigger_camera_z_tolerance", 0.005)
         self.declare_parameter("forward_before_place_distance_m", 0.10)
         self.declare_parameter("forward_before_place_speed_mps", 0.10)
         self.declare_parameter("forward_before_place_stop_hold_sec", 0.2)
         self.declare_parameter("fixed_place_target_x", 0.0)
         self.declare_parameter("fixed_place_target_y", 0.0)
         self.declare_parameter("fixed_place_target_z", 0.275)
+        self.declare_parameter("backup_after_place_distance_m", 0.30)
+        self.declare_parameter("backup_after_place_speed_mps", 0.10)
 
         self.state_pub = self.create_publisher(std_msgs.String, "module_test_docking/state", 10)
         self.cmd_vel_pub = self.create_publisher(geometry_msgs.Twist, "/cmd_vel", 10)
@@ -99,10 +102,6 @@ class ModuleTestDockingNode(Node):
 
         self.tf_buffer = tf2_ros.Buffer(cache_time=rclpy.duration.Duration(seconds=30.0))
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self, spin_thread=True)
-
-        self._reset_odom_client = self.create_client(Trigger, "/reset_odometry")
-        self._reset_odom_done = False
-        self._reset_odom_future = None
 
         self._vision_subs = []
         for color, topic in [
@@ -150,18 +149,7 @@ class ModuleTestDockingNode(Node):
         self._control_timer = self.create_timer(0.1, self._visual_control_timer_cb)
         self._watchdog_timer = self.create_timer(0.5, self._watchdog_timer_cb)
 
-        use_sim_time = False
-        if self.has_parameter("use_sim_time"):
-            use_sim_time = bool(self.get_parameter("use_sim_time").value)
-
-        if use_sim_time:
-            self.get_logger().info(
-                "INIT: use_sim_time=true, skip /reset_odometry and enter PRECISION_ALIGN_PICK (visual)."
-            )
-            self._reset_odom_done = True
-            self._enter_visual_align_pick_phase()
-        else:
-            self._start_reset_odometry()
+        self._enter_visual_align_pick_phase()
 
         self.get_logger().info("module_test_docking initialized (V4 pure visual align + grasp).")
         self._publish_state()
@@ -179,32 +167,6 @@ class ModuleTestDockingNode(Node):
 
     def _stop_cmd_vel(self):
         self.cmd_vel_pub.publish(geometry_msgs.Twist())
-
-    def _start_reset_odometry(self):
-        self.get_logger().info("INIT: waiting for /reset_odometry service ...")
-        if not self._reset_odom_client.wait_for_service(timeout_sec=8.0):
-            self.get_logger().warn("INIT: /reset_odometry service not available, continue test.")
-            self._reset_odom_done = True
-            self._enter_visual_align_pick_phase()
-            return
-
-        self.get_logger().info("INIT: calling /reset_odometry ...")
-        self._reset_odom_future = self._reset_odom_client.call_async(Trigger.Request())
-        self._reset_odom_future.add_done_callback(self._reset_odometry_done_callback)
-
-    def _reset_odometry_done_callback(self, future):
-        try:
-            resp = future.result()
-            if resp is not None and getattr(resp, "success", False):
-                self.get_logger().info(f"INIT: /reset_odometry success: {resp.message}")
-            else:
-                msg = "" if resp is None else getattr(resp, "message", "")
-                self.get_logger().warn(f"INIT: /reset_odometry failed: {msg}")
-        except Exception as e:
-            self.get_logger().warn(f"INIT: /reset_odometry call error: {e}")
-
-        self._reset_odom_done = True
-        self._enter_visual_align_pick_phase()
 
     def _enter_visual_align_pick_phase(self):
         self._stop_cmd_vel()
@@ -279,6 +241,25 @@ class ModuleTestDockingNode(Node):
             f"(stop hold {stop_hold_s:.2f}s)."
         )
 
+    def _enter_backup_after_place_phase(self):
+        self._stop_cmd_vel()
+        self._visual_align_deadline = None
+        self._visual_place_last_point = None
+        self._place_target_point = None
+        self._forward_deadline = None
+
+        dist_m = abs(float(self.get_parameter("backup_after_place_distance_m").value))
+        speed_mps = abs(float(self.get_parameter("backup_after_place_speed_mps").value))
+        speed_mps = max(0.01, speed_mps)
+
+        duration_s = dist_m / speed_mps
+        self._backup_deadline = time.monotonic() + max(0.1, duration_s)
+        self._set_state(TestState.BACKUP_AFTER_PLACE)
+        self.get_logger().info(
+            f"BACKUP_AFTER_PLACE: cmd_vel back {dist_m:.2f}m at {speed_mps:.2f}m/s "
+            f"(~{duration_s:.1f}s), then re-enter PRECISION_ALIGN_PICK."
+        )
+
     def _place_point_callback(self, msg: geometry_msgs.Point, color: str, topic: str):
         self._last_vision_msg_time = self.get_clock().now()
         if self.current_state != TestState.PRECISION_ALIGN_PLACE:
@@ -331,7 +312,7 @@ class ModuleTestDockingNode(Node):
                     z=float(self.get_parameter("fixed_place_target_z").value),
                 )
                 self.get_logger().info(
-                    "FORWARD_BEFORE_PLACE: done -> publish fixed /arm/target_place."
+                    "FORWARD_BEFORE_PLACE: done -> send fixed /arm/target_place and wait arm done."
                 )
                 self._publish_place_target_and_finish()
                 return
@@ -366,6 +347,24 @@ class ModuleTestDockingNode(Node):
                 return
 
             speed_mps = abs(float(self.get_parameter("backup_before_place_speed_mps").value))
+            speed_mps = max(0.01, speed_mps)
+            twist = geometry_msgs.Twist()
+            twist.linear.x = -speed_mps
+            twist.angular.z = 0.0
+            self.cmd_vel_pub.publish(twist)
+            return
+
+        if self.current_state == TestState.BACKUP_AFTER_PLACE:
+            now = time.monotonic()
+            if self._backup_deadline is not None and now >= self._backup_deadline:
+                self._stop_cmd_vel()
+                self.get_logger().info(
+                    "BACKUP_AFTER_PLACE: done -> return to PRECISION_ALIGN_PICK."
+                )
+                self._enter_visual_align_pick_phase()
+                return
+
+            speed_mps = abs(float(self.get_parameter("backup_after_place_speed_mps").value))
             speed_mps = max(0.01, speed_mps)
             twist = geometry_msgs.Twist()
             twist.linear.x = -speed_mps
@@ -473,11 +472,11 @@ class ModuleTestDockingNode(Node):
 
     def _arm_status_callback(self, msg: std_msgs.String):
         self.arm_status = msg.data.lower()
-        self._try_finish_grasp_from_topics()
+        self._try_finish_arm_action_from_topics()
 
     def _arm_gripper_status_callback(self, msg: std_msgs.String):
         self.gripper_status = msg.data.lower()
-        self._try_finish_grasp_from_topics()
+        self._try_finish_arm_action_from_topics()
 
     def _enter_grasp_state(self):
         self._set_state(TestState.GRASP)
@@ -502,37 +501,58 @@ class ModuleTestDockingNode(Node):
             self._set_state(TestState.DONE)
             return
 
+        self._set_state(TestState.PLACE)
+        self._arm_cmd_sent = False
+
         target_pt = self._place_target_point
         self.get_logger().info(
             "PLACE: publishing /arm/target_place in camera frame (meters) "
             f"({target_pt.x:.3f}, {target_pt.y:.3f}, {target_pt.z:.3f})"
         )
         self._arm_place_pub.publish(target_pt)
-        self._set_state(TestState.DONE)
+        self._arm_cmd_sent = True
 
-    def _try_finish_grasp_from_topics(self):
-        if self.current_state != TestState.GRASP:
+    def _try_finish_arm_action_from_topics(self):
+        if self.current_state not in (TestState.GRASP, TestState.PLACE):
             return
         if not self._arm_cmd_sent:
             return
 
-        if self.arm_status == "holding" and self.gripper_status == "object_held":
-            self.get_logger().info("GRASP succeeded (arm holding + object_held).")
-            self._enter_backup_before_place_phase()
+        if self.current_state == TestState.GRASP:
+            if self.arm_status == "holding" and self.gripper_status == "object_held":
+                self.get_logger().info("GRASP succeeded (arm holding + object_held).")
+                self._arm_cmd_sent = False
+                self._enter_backup_before_place_phase()
+                return
+
+            if self.arm_status == "error":
+                self.get_logger().warn("GRASP failed (arm_status=error).")
+                self._arm_cmd_sent = False
+                self._set_state(TestState.DONE)
+                return
+            return
+
+        # PLACE state
+        if self.arm_status == "idle":
+            self.get_logger().info("PLACE succeeded (arm_status=idle).")
+            self._arm_cmd_sent = False
+            self._enter_backup_after_place_phase()
             return
 
         if self.arm_status == "error":
-            self.get_logger().warn("GRASP failed (arm_status=error).")
+            self.get_logger().warn("PLACE failed (arm_status=error).")
+            self._arm_cmd_sent = False
             self._set_state(TestState.DONE)
             return
 
 
 def main(args=None):
     rclpy.init(args=args)
-    rclpy.logging.get_logger("module_test_docking").info(
-        "Startup delay enabled: waiting 30s before node starts."
-    )
-    time.sleep(30.0)
+    startup_logger = rclpy.logging.get_logger("module_test_docking")
+    startup_logger.info("Startup delay enabled: countdown 30s before node starts.")
+    for remaining in range(10, 0, -1):
+        startup_logger.info(f"Node starts in {remaining:02d}s...")
+        time.sleep(1.0)
     node = ModuleTestDockingNode()
     try:
         rclpy.spin(node)

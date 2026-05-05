@@ -45,8 +45,8 @@ controller_server:
     general_goal_checker:
       stateful: true
       plugin: nav2_controller::SimpleGoalChecker
-      xy_goal_tolerance: 0.20
-      yaw_goal_tolerance: 0.15
+      xy_goal_tolerance: 0.15
+      yaw_goal_tolerance: 0.10
 
     FollowPath:
       plugin: "nav2_mppi_controller::MPPIController"
@@ -64,7 +64,7 @@ controller_server:
       vx_max: 0.35
       vx_min: -0.35
       vy_max: 0.5
-      wz_max: 1.9
+      wz_max: 1.0
       iteration_count: 1
       prune_distance: 1.7
       transform_tolerance: 0.1
@@ -136,13 +136,13 @@ controller_server:
         mode: 0
     # FollowPath:
     #   plugin: nav2_regulated_pure_pursuit_controller::RegulatedPurePursuitController
-    #   desired_linear_vel: 0.18
+    #   desired_linear_vel: 0.25
     #   lookahead_dist: 0.5
     #   min_lookahead_dist: 0.3
     #   max_lookahead_dist: 0.75
     #   lookahead_time: 1.5
     #   use_velocity_scaled_lookahead_dist: true
-    #   rotate_to_heading_angular_vel: 0.4
+    #   rotate_to_heading_angular_vel: 1.0
     #   rotate_to_heading_min_angle: 0.35
     #   use_rotate_to_heading: true
     #   max_angular_accel: 1.2
@@ -350,13 +350,13 @@ velocity_smoother:
     scale_velocities: false
     feedback: OPEN_LOOP
     max_velocity:
-    - 0.18
+    - 0.25
     - 0.0
-    - 0.34906585
+    - 1.0
     min_velocity:
-    - -0.18
+    - -0.25
     - 0.0
-    - -0.34906585
+    - -1.0
     max_accel:
     - 1.2
     - 0.0

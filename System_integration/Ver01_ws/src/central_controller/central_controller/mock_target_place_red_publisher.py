@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import time
+
 import rclpy
 from rclpy.node import Node
 import geometry_msgs.msg as geometry_msgs
@@ -14,15 +16,16 @@ class MockTargetPlaceRedPublisher(Node):
         super().__init__("mock_target_place_red_publisher")
 
         self.declare_parameter("publish_rate_hz", 5.0)
-        self.declare_parameter("start_z_m", 0.5)
-        self.declare_parameter("stop_z_m", 0.265)
-        self.declare_parameter("z_step_m", 0.01)
+        self.declare_parameter("start_z_m", 0.6)
+        self.declare_parameter("stop_z_m", 0.33)
+        self.declare_parameter("approach_speed_mps", 0.07)
         self.declare_parameter("fixed_x_m", 0.0)
         self.declare_parameter("fixed_y_m", 0.0)
 
         self._publisher = self.create_publisher(geometry_msgs.Point, "/target_place/red", 10)
         self._current_z = float(self.get_parameter("start_z_m").value)
-        self._reached_stop_z = False
+        self._stopped = False
+        self._last_tick_time = time.monotonic()
 
         publish_rate_hz = max(0.1, float(self.get_parameter("publish_rate_hz").value))
         self._timer = self.create_timer(1.0 / publish_rate_hz, self._timer_cb)
@@ -34,18 +37,31 @@ class MockTargetPlaceRedPublisher(Node):
         )
 
     def _timer_cb(self):
+        if self._stopped:
+            return
+
+        now = time.monotonic()
+        dt = max(0.0, now - self._last_tick_time)
+        self._last_tick_time = now
+
         stop_z = float(self.get_parameter("stop_z_m").value)
-        z_step = max(1e-4, abs(float(self.get_parameter("z_step_m").value)))
+        speed = abs(float(self.get_parameter("approach_speed_mps").value))
+        speed = max(0.0, speed)
         x = float(self.get_parameter("fixed_x_m").value)
         y = float(self.get_parameter("fixed_y_m").value)
 
         if self._current_z > stop_z:
-            self._current_z = max(stop_z, self._current_z - z_step)
-        elif not self._reached_stop_z:
-            self._reached_stop_z = True
+            self._current_z = max(stop_z, self._current_z - speed * dt)
+        else:
+            self._stopped = True
+            try:
+                self._timer.cancel()
+            except Exception:
+                pass
             self.get_logger().info(
-                f"Mock PLACE z reached stop value {stop_z:.3f}m. Holding this value."
+                f"Mock PLACE: reached z={stop_z:.3f}m -> stop publishing /target_place/red."
             )
+            return
 
         msg = geometry_msgs.Point()
         msg.x = x
@@ -54,7 +70,8 @@ class MockTargetPlaceRedPublisher(Node):
         self._publisher.publish(msg)
 
         self.get_logger().info(
-            f"Publish /target_place/red: x={msg.x:.3f}, y={msg.y:.3f}, z={msg.z:.3f}"
+            f"Publish /target_place/red: x={msg.x:.3f}, y={msg.y:.3f}, z={msg.z:.3f} "
+            f"(v={speed:.3f}m/s, dt={dt:.3f}s)"
         )
 
 

@@ -156,7 +156,16 @@ def generate_launch_description():
             '    echo "ERROR: navigate_to_pose not available"; exit 1; '
             '  fi; '
             'done; '
-            'echo "navigate_to_pose action server is available"',
+            'echo "navigate_to_pose action server is available"; '
+            'echo "Precheck: sending 0.1m forward nav goal (frame=base_link) until accepted..."; '
+            'GOAL="{pose: {header: {frame_id: base_link}, pose: {position: {x: 0.1, y: 0.0, z: 0.0}, orientation: {z: 0.0, w: 1.0}}}}"; '
+            'attempt=0; '
+            'until timeout 6 ros2 action send_goal /navigate_to_pose nav2_msgs/action/NavigateToPose "$GOAL" 2>/dev/null | grep -Eiq "goal accepted|accepted"; do '
+            '  attempt=$((attempt+1)); '
+            '  echo "Precheck nav goal not accepted yet, retry #$attempt ..."; '
+            '  sleep 1; '
+            'done; '
+            'echo "Precheck nav goal accepted. Continue launching module test."',
         ],
         output='screen',
     )
@@ -215,9 +224,15 @@ def generate_launch_description():
             on_exit=[
                 static_tf_base_to_laser,
                 laser_filter_node,
-                slam_toolbox_node,
-                slam_configure_activate_cmd,
+                reset_odometry_cmd,
             ],
+        )
+    )
+
+    reset_odometry_handler = RegisterEventHandler(
+        OnProcessExit(
+            target_action=reset_odometry_cmd,
+            on_exit=[slam_toolbox_node, slam_configure_activate_cmd],
         )
     )
 
@@ -231,13 +246,6 @@ def generate_launch_description():
     wait_for_map_handler = RegisterEventHandler(
         OnProcessExit(
             target_action=wait_for_map_cmd,
-            on_exit=[reset_odometry_cmd],
-        )
-    )
-
-    reset_odometry_handler = RegisterEventHandler(
-        OnProcessExit(
-            target_action=reset_odometry_cmd,
             on_exit=[nav2_launch, wait_for_nav_action_cmd],
         )
     )
@@ -273,9 +281,9 @@ def generate_launch_description():
             rplidar_launch,
             wait_for_scan_cmd,
             wait_for_scan_handler,
+            reset_odometry_handler,
             after_slam_lifecycle_handler,
             wait_for_map_handler,
-            reset_odometry_handler,
             wait_for_nav_action_handler,
         ]
     )

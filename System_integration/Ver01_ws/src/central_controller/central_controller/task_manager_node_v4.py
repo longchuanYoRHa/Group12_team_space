@@ -111,6 +111,8 @@ class TaskManagerNodeV4(
         self.arm_status = "idle"
         self.gripper_status = "unknown"
         self._arm_cmd_sent = False
+        self._place_status_at_command = "unknown"
+        self._place_status_changed_after_command = False
 
         self._last_explore_resume = None
         self._map_coords_csv = None
@@ -202,7 +204,7 @@ class TaskManagerNodeV4(
         self.declare_parameter("grasp_target_camera_z_m", 0.265)
         self.declare_parameter("grasp_target_camera_z_tolerance_m", 0.01)
         self.declare_parameter("place_trigger_camera_z_m", 0.36)
-        self.declare_parameter("place_trigger_camera_z_tolerance", 0.5)
+        self.declare_parameter("place_trigger_camera_z_tolerance", 0.005)
         self.declare_parameter("forward_before_place_distance_m", 0.10)
         self.declare_parameter("forward_before_place_speed_mps", 0.10)
         self.declare_parameter("forward_before_place_stop_hold_sec", 0.2)
