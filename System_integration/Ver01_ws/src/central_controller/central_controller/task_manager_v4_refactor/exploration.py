@@ -8,7 +8,12 @@ import geometry_msgs.msg as geometry_msgs
 import rclpy
 import std_msgs.msg as std_msgs
 
-from central_controller.detect_objects_in_pgm_map import get_interest_points_from_pgm
+from central_controller.detect_objects_in_pgm_map import (
+    compute_nav_goal_map_xy,
+    get_interest_points_from_pgm,
+    load_map_metadata_from_yaml,
+    load_pgm,
+)
 from central_controller.task_manager_utils import (
     compute_pregrasp_pose,
     is_pose_in_blacklist as check_pose_in_blacklist,
@@ -439,6 +444,29 @@ class TaskManagerExplorationMixin:
         if self._map_coords_csv:
             self._map_coords_csv.log_pgm_points(raw_points, "pgm_raw", pgm_path=pgm_path)
 
+        # 缓存 PGM 栅格，用于兴趣点导航时做 8 方向近障检查并选 standoff 方向。
+        self._interest_nav_map_context = None
+        try:
+            meta = load_map_metadata_from_yaml(pgm_path)
+            if meta is None:
+                self.get_logger().warn(
+                    "Map YAML metadata not found; interest-point nav will use fallback pregrasp logic."
+                )
+            else:
+                map_res, map_origin = meta
+                map_w, map_h, map_pixels = load_pgm(pgm_path)
+                self._interest_nav_map_context = {
+                    "w": map_w,
+                    "h": map_h,
+                    "pixels": map_pixels,
+                    "resolution": map_res,
+                    "origin": map_origin,
+                }
+        except Exception as exc:
+            self.get_logger().warn(
+                f"Failed to load map context for obstacle-aware nav; fallback to pregrasp. err={exc}"
+            )
+
         filtered = []
         for map_x, map_y in raw_points:
             point = geometry_msgs.Point()
@@ -492,18 +520,44 @@ class TaskManagerExplorationMixin:
 
         robot_x, robot_y = self._get_robot_xy_in_map()
         standoff_m = float(self.get_parameter("interest_point_standoff_m").value)
-        goal_pose = compute_pregrasp_pose(
-            target_pose,
-            standoff_m,
-            robot_x,
-            robot_y,
-            frame_id="map",
-            stamp=self.get_clock().now().to_msg(),
-        )
+        map_ctx = getattr(self, "_interest_nav_map_context", None)
+        if map_ctx is not None:
+            goal_x, goal_y = compute_nav_goal_map_xy(
+                map_x,
+                map_y,
+                robot_x,
+                robot_y,
+                standoff_m,
+                w=map_ctx["w"],
+                h=map_ctx["h"],
+                pixels=map_ctx["pixels"],
+                resolution=map_ctx["resolution"],
+                origin=map_ctx["origin"],
+                obstacle_check_radius_m=1.0,
+                obstacle_check_start_cardinal_m=0.28,
+                obstacle_check_start_diagonal_m=0.20,
+            )
+            goal_pose = geometry_msgs.PoseStamped()
+            goal_pose.header.frame_id = "map"
+            goal_pose.header.stamp = self.get_clock().now().to_msg()
+            goal_pose.pose.position.x = goal_x
+            goal_pose.pose.position.y = goal_y
+            goal_pose.pose.position.z = 0.0
+            yaw_to_poi = math.atan2(map_y - goal_y, map_x - goal_x)
+            goal_pose.pose.orientation = quaternion_from_yaw(yaw_to_poi)
+        else:
+            goal_pose = compute_pregrasp_pose(
+                target_pose,
+                standoff_m,
+                robot_x,
+                robot_y,
+                frame_id="map",
+                stamp=self.get_clock().now().to_msg(),
+            )
 
         self.get_logger().info(
             f"Nav to interest point {self.interest_point_index + 1}/{len(self.interest_points)} "
-            f"POI=({map_x:.2f}, {map_y:.2f}) standoff={standoff_m:.2f} m (goal on line toward robot, facing POI)"
+            f"POI=({map_x:.2f}, {map_y:.2f}) standoff={standoff_m:.2f} m (facing POI)"
         )
         self._send_nav_goal(goal_pose, NavPurpose.INTEREST_POINT)
 

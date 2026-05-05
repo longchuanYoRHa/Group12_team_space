@@ -370,19 +370,105 @@ def compute_nav_goal_map_xy(
     robot_mx: float,
     robot_my: float,
     standoff_m: float,
+    w: Optional[int] = None,
+    h: Optional[int] = None,
+    pixels: Optional[List[int]] = None,
+    resolution: Optional[float] = None,
+    origin: Optional[Tuple[float, float]] = None,
+    obstacle_check_radius_m: float = 1.0,
+    obstacle_check_start_cardinal_m: float = 0.28,
+    obstacle_check_start_diagonal_m: float = 0.20,
 ) -> Tuple[float, float]:
     """
     与 task_manager_utils.compute_pregrasp_pose 一致：沿车→兴趣点方向，
     在兴趣点一侧距兴趣点 standoff_m 的 map 坐标（无 ROS 依赖）。
+
+    若提供地图栅格信息，则以兴趣点为中心在 8 个方向上做 obstacle_check_radius_m
+    范围内障碍检查（上下左右+45 度对角）：
+      - 上下左右从 obstacle_check_start_cardinal_m 开始采样；
+      - 对角 45 度从 obstacle_check_start_diagonal_m 开始采样。
+    当任一方向存在障碍时，选择“障碍最远/无障碍”方向放置待机点；
+    若 8 方向都无障碍，则回退到原始“参考车→兴趣点”逻辑。
     """
-    dx = robot_mx - poi_mx
-    dy = robot_my - poi_my
-    dist = math.hypot(dx, dy)
+    dx_fallback = robot_mx - poi_mx
+    dy_fallback = robot_my - poi_my
+    dist = math.hypot(dx_fallback, dy_fallback)
     if dist > 1e-9:
-        dx /= dist
-        dy /= dist
+        dx_fallback /= dist
+        dy_fallback /= dist
     else:
-        dx, dy = 1.0, 0.0
+        dx_fallback, dy_fallback = 1.0, 0.0
+
+    dx, dy = dx_fallback, dy_fallback
+
+    def first_obstacle_distance_m(
+        dir_x: float, dir_y: float, start_distance_m: float
+    ) -> Optional[float]:
+        if (
+            w is None
+            or h is None
+            or pixels is None
+            or resolution is None
+            or origin is None
+            or obstacle_check_radius_m <= 0.0
+        ):
+            return None
+        step_m = max(float(resolution) * 0.5, 0.01)
+        d = max(step_m, start_distance_m)
+        if d > obstacle_check_radius_m + 1e-9:
+            return None
+        while d <= obstacle_check_radius_m + 1e-9:
+            sx = poi_mx + d * dir_x
+            sy = poi_my + d * dir_y
+            spx, spy = map_to_pixel(sx, sy, float(resolution), origin[0], origin[1], h)
+            ix, iy = int(round(spx)), int(round(spy))
+            if ix < 0 or ix >= w or iy < 0 or iy >= h:
+                return d
+            if not _is_free(pixels[iy * w + ix]):
+                return d
+            d += step_m
+        return None
+
+    if (
+        w is not None
+        and h is not None
+        and pixels is not None
+        and resolution is not None
+        and origin is not None
+        and obstacle_check_radius_m > 0.0
+    ):
+        raw_dirs = [
+            (1.0, 0.0),
+            (-1.0, 0.0),
+            (0.0, 1.0),
+            (0.0, -1.0),
+            (1.0, 1.0),
+            (-1.0, 1.0),
+            (-1.0, -1.0),
+            (1.0, -1.0),
+        ]
+        dir_scores = []
+        any_obstacle = False
+        for rx, ry in raw_dirs:
+            norm = math.hypot(rx, ry)
+            ux, uy = rx / norm, ry / norm
+            if abs(rx) + abs(ry) == 1:
+                start_m = obstacle_check_start_cardinal_m
+            else:
+                start_m = obstacle_check_start_diagonal_m
+            obs_d = first_obstacle_distance_m(ux, uy, start_m)
+            has_obstacle = obs_d is not None
+            if has_obstacle:
+                any_obstacle = True
+            clear_d = obs_d if obs_d is not None else obstacle_check_radius_m
+            can_place_standoff = clear_d >= standoff_m
+            align_fallback = ux * dx_fallback + uy * dy_fallback
+            dir_scores.append((can_place_standoff, clear_d, align_fallback, ux, uy))
+
+        if any_obstacle and dir_scores:
+            best = max(dir_scores, key=lambda s: (s[0], s[1], s[2]))
+            dx, dy = best[3], best[4]
+
     gx = poi_mx + standoff_m * dx
     gy = poi_my + standoff_m * dy
     return gx, gy
@@ -419,7 +505,19 @@ def draw_interest_points_with_nav_goals(
     print(f"导航预览参考车 (map): ({rx:.3f}, {ry:.3f}) m, standoff={standoff_m:.2f} m")
     for i, (cx_px, cy_px, area) in enumerate(blobs):
         poi_mx, poi_my = pixel_to_map(cx_px, cy_px, resolution, origin_x, origin_y, h)
-        gx, gy = compute_nav_goal_map_xy(poi_mx, poi_my, rx, ry, standoff_m)
+        gx, gy = compute_nav_goal_map_xy(
+            poi_mx,
+            poi_my,
+            rx,
+            ry,
+            standoff_m,
+            w=w,
+            h=h,
+            pixels=pixels,
+            resolution=resolution,
+            origin=origin,
+            obstacle_check_radius_m=1.0,
+        )
         npx, npy = map_to_pixel(gx, gy, resolution, origin_x, origin_y, h)
         ix_p, iy_p = int(round(cx_px)), int(round(cy_px))
         ix_n, iy_n = int(round(npx)), int(round(npy))
