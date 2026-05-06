@@ -7,6 +7,8 @@ from central_controller.task_manager_v4_refactor.models import CargoState, TaskS
 
 
 class TaskManagerArmMixin:
+    """Arm/gripper command publication and result handling for V4."""
+
     def _copy_point(self, source: geometry_msgs.Point):
         target = geometry_msgs.Point()
         target.x = source.x
@@ -30,6 +32,8 @@ class TaskManagerArmMixin:
         if self.arm_status == "holding" and self.gripper_status == "object_held":
             self.get_logger().info("Grasp succeeded!")
             self.cargo_state = CargoState.HAS_OBJECT
+            # Persist the picked object's color so later bin detections can be filtered.
+            self._carried_object_color = self._grasp_command_color
             self.grasp_retry_count = 0
             self.adjust_nav2_for_carry_mode(True)
             self._arm_cmd_sent = False
@@ -42,6 +46,7 @@ class TaskManagerArmMixin:
         if self.arm_status == "error" or (self.arm_status == "idle" and self._arm_cmd_sent):
             self.grasp_retry_count += 1
             self._arm_cmd_sent = False
+            self._grasp_command_color = None
             if self.grasp_retry_count >= self.max_grasp_retries:
                 self.get_logger().warn("Grasp failed, max retries reached, abandoning object")
                 if self.object_pose:
@@ -50,17 +55,33 @@ class TaskManagerArmMixin:
                 self.state = TaskState.EXPLORE
                 self._publish_explore_resume_if_changed(True)
             else:
+                # Do not resend a pick target here; the next vision callback will re-drive the flow.
                 self.get_logger().info(
                     f"Grasp failed, retrying ({self.grasp_retry_count}/{self.max_grasp_retries})"
                 )
 
     def _handle_place_arm_result(self):
+        if (
+            not self._place_status_changed_after_command
+            and self.arm_status != self._place_status_at_command
+        ):
+            self._place_status_changed_after_command = True
+
         if self.arm_status == "idle":
+            if (
+                self._place_status_at_command == "idle"
+                and not self._place_status_changed_after_command
+            ):
+                return
             self.get_logger().info("Place succeeded!")
             self.cargo_state = CargoState.EMPTY
             self.place_retry_count = 0
             self.adjust_nav2_for_carry_mode(False)
             self._arm_cmd_sent = False
+            self._grasp_command_color = None
+            self._carried_object_color = None
+            self._place_status_at_command = "unknown"
+            self._place_status_changed_after_command = False
             if self.bin_pose is not None:
                 self.bin_blacklist.append(self.bin_pose.pose.position)
             if self.explore_done_flag:
@@ -78,6 +99,8 @@ class TaskManagerArmMixin:
         if self.arm_status == "error":
             self.place_retry_count += 1
             self._arm_cmd_sent = False
+            self._place_status_at_command = "unknown"
+            self._place_status_changed_after_command = False
             if self.place_retry_count >= self.max_place_retries:
                 self.get_logger().warn(
                     "Place failed, max retries reached, resuming explore for bin"
@@ -109,6 +132,7 @@ class TaskManagerArmMixin:
             f"in {self.get_parameter('camera_frame_id').value} frame."
         )
         self.arm_pick_pub.publish(target_pt)
+        self._grasp_command_color = color
         self._arm_cmd_sent = True
 
     def _execute_place_with_current_bin(self):
@@ -141,5 +165,26 @@ class TaskManagerArmMixin:
             f"in {self.get_parameter('camera_frame_id').value} frame."
         )
         self.arm_place_pub.publish(target_pt)
+        self._place_status_at_command = self.arm_status
+        self._place_status_changed_after_command = False
         self._arm_cmd_sent = True
+
+    def _execute_place_with_fixed_target(self):
+        if self._arm_cmd_sent:
+            return
+
+        target_pt = geometry_msgs.Point()
+        target_pt.x = float(self.get_parameter("fixed_place_target_x").value)
+        target_pt.y = float(self.get_parameter("fixed_place_target_y").value)
+        target_pt.z = float(self.get_parameter("fixed_place_target_z").value)
+
+        self.get_logger().info(
+            "FORWARD_BEFORE_PLACE done: sending fixed place target "
+            "to manipulator (/arm/target_place)."
+        )
+        self.arm_place_pub.publish(target_pt)
+        self._place_status_at_command = self.arm_status
+        self._place_status_changed_after_command = False
+        self._arm_cmd_sent = True
+        self.state = TaskState.PLACE_IN_BIN
 

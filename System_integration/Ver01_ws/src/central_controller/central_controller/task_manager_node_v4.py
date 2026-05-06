@@ -14,6 +14,7 @@ Task manager state machine node V4.
 """
 
 import os
+import time
 
 import geometry_msgs.msg as geometry_msgs
 import nav2_msgs.action as nav2_msgs
@@ -29,10 +30,6 @@ from central_controller.detect_objects_in_pgm_map import DEFAULT_ORIGIN, DEFAULT
 from central_controller.detection_map_coordinates_csv import DetectionMapCoordinatesCsvLogger
 from central_controller.task_manager_v4_refactor.alignment import TaskManagerAlignmentMixin
 from central_controller.task_manager_v4_refactor.arm import TaskManagerArmMixin
-from central_controller.task_manager_v4_refactor.docking import (
-    DOCKROBOT_IMPORT_ERROR,
-    DockRobot,
-)
 from central_controller.task_manager_v4_refactor.exploration import (
     TaskManagerExplorationMixin,
 )
@@ -60,6 +57,14 @@ class TaskManagerNodeV4(
     TaskManagerNavigationMixin,
     Node,
 ):
+    """Central task scheduler node (V4).
+
+    Notes:
+    - The node runs a simple event-dispatch loop driven by a periodic timer (TickEvent)
+      plus async callbacks (Nav2 futures, vision topics, explore finished).
+    - Most state-specific logic lives in the refactor mixins under `task_manager_v4_refactor/`.
+    """
+
     def __init__(self):
         super().__init__("task_manager_v4")
         self._init_runtime_state()
@@ -103,16 +108,19 @@ class TaskManagerNodeV4(
 
         self.detected_object_colors = set()
         self.detected_bin_colors = set()
-        self._map_fallback_round_count = 0
-        self._map_fallback_max_rounds = 15
         self.interest_points = []
         self.interest_point_index = 0
         self.current_interest_point = None
         self.wait_at_point_start_time = None
+        self._last_nav2_distance_remaining_m = None
 
         self.arm_status = "idle"
         self.gripper_status = "unknown"
         self._arm_cmd_sent = False
+        self._grasp_command_color = None
+        self._carried_object_color = None
+        self._place_status_at_command = "unknown"
+        self._place_status_changed_after_command = False
 
         self._last_explore_resume = None
         self._map_coords_csv = None
@@ -121,26 +129,6 @@ class TaskManagerNodeV4(
         self.nav2_client = ActionClient(self, nav2_msgs.NavigateToPose, "navigate_to_pose")
         self.nav2_goal_handle = None
         self.current_nav_purpose = NavPurpose.NONE
-
-        self.declare_parameter("dock_action_name", "dock_robot")
-        self.declare_parameter("dock_type", "simple_non_charging_dock")
-        self.dock_client = None
-        if DockRobot is None:
-            self.get_logger().warn(
-                "DockRobot action type not importable in this environment. "
-                "This environment should provide it from `nav2_msgs.action` "
-                "or older setups from `opennav_docking_msgs.action`. "
-                f"Original error: {DOCKROBOT_IMPORT_ERROR}. "
-                "Docking via DockRobot will be unavailable."
-            )
-        else:
-            self.dock_client = ActionClient(
-                self,
-                DockRobot,
-                self.get_parameter("dock_action_name").value,
-            )
-        self._dock_goal_handle = None
-        self._dock_result_future = None
 
     def _setup_publishers(self) -> None:
         self.explore_control_pub = self.create_publisher(std_msgs.Bool, "explore/resume", 10)
@@ -200,8 +188,9 @@ class TaskManagerNodeV4(
     def _declare_parameters(self) -> None:
         self.declare_parameter("pregrasp_distance", 0.5)
         self.declare_parameter("interest_point_standoff_m", 0.30)
-        self.declare_parameter("interest_point_max_bbox_m", 0.30)
-        self.declare_parameter("interest_point_dedupe_min_separation_px", 4.0)
+        self.declare_parameter("interest_point_max_bbox_m", 0.40)
+        self.declare_parameter("interest_point_dedupe_min_separation_px", 6.0)
+        self.declare_parameter("interest_point_vision_trigger_distance_m", 1.0)
         self.declare_parameter("preplace_distance", 0.6)
         self.declare_parameter("camera_frame_id", "camera_link")
         self.declare_parameter("maps_directory", "")
@@ -211,9 +200,8 @@ class TaskManagerNodeV4(
         self.declare_parameter("map_origin_y", DEFAULT_ORIGIN[1])
         self.declare_parameter("wait_at_interest_point_sec", 15.0)
 
-        self.declare_parameter("docking_linear_speed_mps", 0.01)
+        self.declare_parameter("docking_linear_speed_mps", 0.08)
         self.declare_parameter("docking_angular_speed_max_rps", 0.25)
-        self.declare_parameter("docking_stop_distance_m", 0.265)
 
         # Visual docking (object)
         self.declare_parameter("visual_docking_x_kp", 1.5)
@@ -223,6 +211,14 @@ class TaskManagerNodeV4(
         # Grasp decision threshold (distance in camera z)
         self.declare_parameter("grasp_target_camera_z_m", 0.265)
         self.declare_parameter("grasp_target_camera_z_tolerance_m", 0.01)
+        self.declare_parameter("place_trigger_camera_z_m", 0.36)
+        self.declare_parameter("place_trigger_camera_z_tolerance", 0.005)
+        self.declare_parameter("forward_before_place_distance_m", 0.10)
+        self.declare_parameter("forward_before_place_speed_mps", 0.10)
+        self.declare_parameter("forward_before_place_stop_hold_sec", 0.2)
+        self.declare_parameter("fixed_place_target_x", 0.0)
+        self.declare_parameter("fixed_place_target_y", 0.0)
+        self.declare_parameter("fixed_place_target_z", 0.275)
 
         self.declare_parameter("backup_distance_m", 0.20)
         self.declare_parameter("pre_explore_spin_enable", True)
@@ -237,11 +233,6 @@ class TaskManagerNodeV4(
             "task_manager/get_state",
             self._handle_get_state_service,
         )
-        self._reset_odom_client = self.create_client(Trigger, "/reset_odometry")
-        self._reset_odom_after_nav2_done = False
-        self._reset_odom_after_nav2_started_at = None
-        self._reset_odom_after_nav2_future = None
-        self._reset_odom_after_nav2_last_warn_sec = 0.0
 
     def _setup_csv_logger(self) -> None:
         if not self.get_parameter("detection_map_coordinates_csv_enable").value:
@@ -260,13 +251,15 @@ class TaskManagerNodeV4(
     def _setup_precision_align_state(self) -> None:
         self._precision_align_source_purpose = NavPurpose.NONE
         self._precision_align_next_state = None
-        self._dock_goal_sent = False
-        self._dock_goal_handle = None
-        self._dock_result_future = None
 
         self._visual_docking_active = False
         self._visual_docking_last_point = None
         self._visual_docking_start_time = None
+        self._forward_stop_hold_deadline = None
+        self._forward_deadline = None
+        self._forward_start_time = None
+        self._forward_speed_mps = 0.0
+        self._forward_distance_m = 0.0
 
         self._backup_end_time = None
         self._backup_next_state = None
@@ -278,6 +271,8 @@ class TaskManagerNodeV4(
         return response
 
     def dispatch(self, event: TaskEvent) -> None:
+        # Single entry point for all events. This keeps state transitions centralized
+        # and makes it easier to reason about "who can change state".
         if isinstance(event, Nav2GoalResponseEvent):
             self._apply_nav2_goal_response(event.future)
             return
@@ -308,6 +303,8 @@ class TaskManagerNodeV4(
         self.cargo_state_pub.publish(cargo_msg)
 
     def _handle_tick_by_state(self) -> None:
+        # Keep tick lightweight: only do periodic control steps / result polling for
+        # states that require it.
         if self.state == TaskState.INIT:
             self._handle_init_state()
         elif self.state == TaskState.GRASP and self._arm_cmd_sent:
@@ -317,6 +314,8 @@ class TaskManagerNodeV4(
         elif self.state == TaskState.PRECISION_ALIGN:
             self._precision_align_control_step()
             self._handle_precision_align_timeout_if_needed()
+        elif self.state == TaskState.FORWARD_BEFORE_PLACE:
+            self._forward_before_place_control_step()
         elif self.state == TaskState.BACKUP_AFTER_ACTION:
             self._backup_control_step()
 
@@ -326,6 +325,11 @@ class TaskManagerNodeV4(
 
 def main(args=None):
     rclpy.init(args=args)
+    startup_logger = rclpy.logging.get_logger("task_manager_v4")
+    startup_logger.info("Startup delay enabled: countdown 10s before node starts.")
+    for remaining in range(10, 0, -1):
+        startup_logger.info(f"Node starts in {remaining:02d}s...")
+        time.sleep(1.0)
     node = TaskManagerNodeV4()
     try:
         rclpy.spin(node)

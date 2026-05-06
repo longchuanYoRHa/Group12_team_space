@@ -15,7 +15,7 @@ setup(
         (os.path.join('share', package_name, 'launch'),
          glob('launch/*launch.[pxy][yma]*')),
          (os.path.join('share', package_name, 'config'),
-         glob('config/*.yaml')),
+         glob('config/*.yaml') + glob('config/*.xml')),
          (os.path.join('share', package_name, 'maps'),
          glob('maps/*')),
          (os.path.join('share', package_name, 'config'),
@@ -43,6 +43,8 @@ setup(
             'module_test_docking = central_controller.module_test_docking:main',
             'module_test_box_mapping = central_controller.module_test_box_mapping:main',
             'module_test_explore_approach = central_controller.module_test_explore_approach:main',
+            'mock_target_pick_red_publisher = central_controller.mock_target_pick_red_publisher:main',
+            'mock_target_place_red_publisher = central_controller.mock_target_place_red_publisher:main',
         ],
     },
 )

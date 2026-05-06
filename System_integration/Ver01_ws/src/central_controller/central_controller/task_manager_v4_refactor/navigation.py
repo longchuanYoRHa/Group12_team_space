@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import math
-
 import rclpy
 from action_msgs.msg import GoalStatus
 import geometry_msgs.msg as geometry_msgs
@@ -9,7 +7,6 @@ import nav2_msgs.action as nav2_msgs
 import std_msgs.msg as std_msgs
 import tf2_geometry_msgs
 
-from central_controller.task_manager_utils import quat_yaw
 from central_controller.task_manager_v4_refactor.models import (
     Nav2GoalResponseEvent,
     Nav2ResultEvent,
@@ -19,6 +16,8 @@ from central_controller.task_manager_v4_refactor.models import (
 
 
 class TaskManagerNavigationMixin:
+    """Navigation/TF utilities and Nav2 action handling used by Task Manager V4."""
+
     def _cache_missing_bins_as_home_pose_if_empty(self) -> bool:
         if self.cached_bin_poses or self.home_pose is None:
             return False
@@ -84,36 +83,6 @@ class TaskManagerNavigationMixin:
         )
         return tf2_geometry_msgs.do_transform_point(point_in_base, base_to_target)
 
-    def _get_point_in_base_link_mm(self, pose_stamped: geometry_msgs.PoseStamped):
-        try:
-            transform = self.tf_buffer.lookup_transform(
-                "base_link",
-                pose_stamped.header.frame_id,
-                rclpy.time.Time(),
-                timeout=rclpy.duration.Duration(seconds=0.5),
-            )
-            pose_in_base = tf2_geometry_msgs.do_transform_pose(pose_stamped.pose, transform)
-            pt = geometry_msgs.Point()
-            pt.x = pose_in_base.position.x * 1000.0
-            pt.y = pose_in_base.position.y * 1000.0
-            pt.z = pose_in_base.position.z * 1000.0
-            return pt
-        except Exception as exc:
-            self.get_logger().error(f"TF transform to base_link failed: {exc}")
-            return None
-
-    def _point_camera_to_base_link_mm(self, point_msg: geometry_msgs.Point):
-        try:
-            point_in_base = self._transform_camera_point(point_msg, "base_link")
-            pt = geometry_msgs.Point()
-            pt.x = point_in_base.point.x * 1000.0
-            pt.y = point_in_base.point.y * 1000.0
-            pt.z = point_in_base.point.z * 1000.0
-            return pt
-        except Exception as exc:
-            self.get_logger().error(f"TF camera->base_link failed: {exc}")
-            return None
-
     def _publish_explore_resume_if_changed(self, resume: bool):
         if self._last_explore_resume is not None and self._last_explore_resume == resume:
             return
@@ -167,34 +136,6 @@ class TaskManagerNavigationMixin:
         except Exception:
             return (0.0, 0.0)
 
-    def _build_backward_nav_goal_in_frame(self, distance_m: float, target_frame: str):
-        try:
-            transform = self.tf_buffer.lookup_transform(
-                target_frame,
-                "base_link",
-                rclpy.time.Time(),
-                timeout=rclpy.duration.Duration(seconds=0.5),
-            )
-        except Exception as exc:
-            self.get_logger().error(
-                f"Failed to get robot pose in {target_frame} for backup nav goal: {exc}"
-            )
-            return None
-
-        yaw = quat_yaw(transform.transform.rotation)
-        goal_pose = geometry_msgs.PoseStamped()
-        goal_pose.header.frame_id = target_frame
-        goal_pose.header.stamp = self.get_clock().now().to_msg()
-        goal_pose.pose.position.x = (
-            transform.transform.translation.x - distance_m * math.cos(yaw)
-        )
-        goal_pose.pose.position.y = (
-            transform.transform.translation.y - distance_m * math.sin(yaw)
-        )
-        goal_pose.pose.position.z = transform.transform.translation.z
-        goal_pose.pose.orientation = transform.transform.rotation
-        return goal_pose
-
     def _cancel_nav2_goal_if_any(self):
         if self.nav2_goal_handle is not None:
             self.nav2_client.cancel_goal_async(self.nav2_goal_handle)
@@ -206,9 +147,20 @@ class TaskManagerNavigationMixin:
         goal_msg.pose = goal_pose
         self.current_nav_purpose = purpose
         self.nav2_goal_handle = None
+        self._last_nav2_distance_remaining_m = None
         self.get_logger().info(f"Sending Nav2 goal for {purpose.value}")
-        send_goal_future = self.nav2_client.send_goal_async(goal_msg)
+        send_goal_future = self.nav2_client.send_goal_async(
+            goal_msg,
+            feedback_callback=self.nav2_feedback_callback,
+        )
         send_goal_future.add_done_callback(self.nav2_goal_response_callback)
+
+    def nav2_feedback_callback(self, feedback_msg):
+        feedback = feedback_msg.feedback
+        distance_remaining = getattr(feedback, "distance_remaining", None)
+        if distance_remaining is None:
+            return
+        self._last_nav2_distance_remaining_m = float(distance_remaining)
 
     def nav2_goal_response_callback(self, future):
         self.dispatch(Nav2GoalResponseEvent(future))

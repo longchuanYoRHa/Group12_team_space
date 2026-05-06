@@ -18,6 +18,7 @@
 #include <memory>
 #include <functional>
 #include <mutex>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -65,8 +66,8 @@ public:
     , tf_listener_(tf_buffer_)
     , costmap_client_(*this, &tf_buffer_)
     , prev_distance_(0.0)
-    , last_markers_count_(0)
     , last_progress_(this->now())
+    , last_markers_count_(0)
   {
     double timeout = 0.0;
     double min_frontier_size = 0.5;
@@ -99,6 +100,11 @@ public:
     if (!this->has_parameter("robot_base_frame")) {
       this->declare_parameter<std::string>("robot_base_frame", "base_link");
     }
+    if (!this->has_parameter("switch_frontier_distance")) {
+      // If NavigateToPose feedback reports remaining distance <= this value,
+      // we preempt the current goal and immediately switch to the next frontier.
+      this->declare_parameter<float>("switch_frontier_distance", 0.45);
+    }
 
     this->get_parameter("planner_frequency", planner_frequency_);
     this->get_parameter("progress_timeout", timeout);
@@ -109,6 +115,7 @@ public:
     this->get_parameter("min_frontier_size", min_frontier_size);
     this->get_parameter("return_to_init", return_to_init_);
     this->get_parameter("robot_base_frame", robot_base_frame_);
+    this->get_parameter("switch_frontier_distance", switch_frontier_distance_);
 
     progress_timeout_ = timeout;
 
@@ -427,6 +434,8 @@ private:
     nav_goal_in_flight_ = true;
     ++nav_goal_generation_;
     const uint64_t goal_generation = nav_goal_generation_;
+    early_switch_armed_for_goal_ = false;
+    max_distance_remaining_seen_ = 0.0;
 
     auto goal = nav2_msgs::action::NavigateToPose::Goal();
     goal.pose.pose.position = target_position;
@@ -436,6 +445,85 @@ private:
 
     auto send_goal_options =
         rclcpp_action::Client<nav2_msgs::action::NavigateToPose>::SendGoalOptions();
+    send_goal_options.goal_response_callback =
+        [this, goal_generation](
+            const rclcpp_action::ClientGoalHandle<nav2_msgs::action::NavigateToPose>::SharedPtr&
+                goal_handle) {
+          if (goal_generation != nav_goal_generation_) {
+            return;
+          }
+          if (!goal_handle) {
+            RCLCPP_WARN(logger_, "NavigateToPose goal rejected by server");
+            nav_goal_in_flight_ = false;
+            if (active_) {
+              makePlan();
+            }
+            return;
+          }
+          {
+            std::lock_guard<std::mutex> lk(goal_handle_mutex_);
+            current_goal_handle_ = goal_handle;
+          }
+        };
+    send_goal_options.feedback_callback =
+        [this, target_position, goal_generation](
+            rclcpp_action::ClientGoalHandle<nav2_msgs::action::NavigateToPose>::SharedPtr,
+            const std::shared_ptr<const nav2_msgs::action::NavigateToPose::Feedback> feedback) {
+          if (goal_generation != nav_goal_generation_) {
+            return;
+          }
+          if (!active_ || !nav_goal_in_flight_ || !feedback) {
+            return;
+          }
+
+          // Nav2 feedback reports remaining distance along the planned path.
+          const double remaining = static_cast<double>(feedback->distance_remaining);
+          if (!std::isfinite(remaining)) {
+            return;
+          }
+
+          const double threshold = static_cast<double>(switch_frontier_distance_);
+          constexpr double kEnableHysteresis = 0.10;  // meters
+          max_distance_remaining_seen_ =
+              std::max(max_distance_remaining_seen_, remaining);
+          if (!early_switch_armed_for_goal_ &&
+              max_distance_remaining_seen_ > (threshold + kEnableHysteresis)) {
+            early_switch_armed_for_goal_ = true;
+          }
+
+          // Guard: only switch after we've observed a clearly "far enough"
+          // feedback value for this goal. This avoids immediate false triggers
+          // from transient 0/small feedback right after goal start.
+          if (!early_switch_armed_for_goal_) {
+            return;
+          }
+          if (remaining > threshold) {
+            return;
+          }
+
+          // Preempt current goal and immediately pick the next frontier.
+          nav_goal_in_flight_ = false;
+          ++nav_goal_generation_;
+
+          rclcpp_action::ClientGoalHandle<nav2_msgs::action::NavigateToPose>::SharedPtr gh;
+          {
+            std::lock_guard<std::mutex> lk(goal_handle_mutex_);
+            gh = current_goal_handle_;
+            current_goal_handle_.reset();
+          }
+          if (gh) {
+            move_base_client_->async_cancel_goal(gh);
+          } else {
+            move_base_client_->async_cancel_all_goals();
+          }
+
+          // Mark this frontier as "completed enough" so we don't immediately re-pick it.
+          markGoalCompleted(target_position);
+
+          if (active_) {
+            makePlan();
+          }
+        };
     send_goal_options.result_callback =
         [this, target_position, goal_generation](
             const rclcpp_action::ClientGoalHandle<
@@ -466,6 +554,10 @@ private:
       const geometry_msgs::msg::Point& frontier_goal)
   {
     nav_goal_in_flight_ = false;
+    {
+      std::lock_guard<std::mutex> lk(goal_handle_mutex_);
+      current_goal_handle_.reset();
+    }
 
     switch (result.code) {
       case rclcpp_action::ResultCode::SUCCEEDED:
@@ -518,6 +610,10 @@ private:
     resuming_ = false;
     nav_goal_in_flight_ = false;
     ++nav_goal_generation_;
+    {
+      std::lock_guard<std::mutex> lk(goal_handle_mutex_);
+      current_goal_handle_.reset();
+    }
     move_base_client_->async_cancel_all_goals();
     exploring_timer_->cancel();
 
@@ -584,9 +680,17 @@ private:
   double planner_frequency_{1.0};
   double potential_scale_{1e-3}, orientation_scale_{0.0}, gain_scale_{1.0};
   double progress_timeout_{90.0};
+  double switch_frontier_distance_{0.45};
   bool visualize_{false};
   bool return_to_init_{false};
   std::string robot_base_frame_;
+
+  std::mutex goal_handle_mutex_;
+  rclcpp_action::ClientGoalHandle<nav2_msgs::action::NavigateToPose>::SharedPtr
+      current_goal_handle_;
+
+  bool early_switch_armed_for_goal_{false};
+  double max_distance_remaining_seen_{0.0};
 };
 }  // namespace explore
 

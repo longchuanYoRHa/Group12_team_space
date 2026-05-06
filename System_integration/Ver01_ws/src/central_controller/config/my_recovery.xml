@@ -1,0 +1,61 @@
+<!--
+  Custom NavigateToPose behavior tree.
+  Based on Nav2 jazzy's default `navigate_to_pose_w_replanning_and_recovery.xml`,
+  with the inner RoundRobin "RecoveryActions" list customized for our robot:
+    1) Clear local + global costmaps (Sequence "ClearingActions")
+    2) BackUp 0.20 m at 0.05 m/s
+    3) Wait 2 s
+    4) Spin 0.5 rad (~30 deg)
+  The MainTree / PipelineSequence / ControllerSelector / PlannerSelector /
+  ComputePathToPose / FollowPath wiring is kept intact so NavigateToPose still
+  plans and follows a path normally; only the recovery branch is customized.
+
+  Loaded via the bt_navigator parameter
+    bt_navigator.ros__parameters.default_nav_to_pose_bt_xml
+  in `nav2_params_smac2d_rpp.yaml`.
+-->
+<root BTCPP_format="4" main_tree_to_execute="MainTree">
+  <BehaviorTree ID="MainTree">
+    <RecoveryNode number_of_retries="2" name="NavigateRecovery">
+      <PipelineSequence name="NavigateWithReplanning">
+        <ControllerSelector selected_controller="{selected_controller}" default_controller="FollowPath" topic_name="controller_selector"/>
+        <PlannerSelector selected_planner="{selected_planner}" default_planner="GridBased" topic_name="planner_selector"/>
+        <RateController hz="1.0">
+          <RecoveryNode number_of_retries="1" name="ComputePathToPose">
+            <ComputePathToPose goal="{goal}" path="{path}" planner_id="{selected_planner}" error_code_id="{compute_path_error_code}"/>
+            <Sequence>
+              <WouldAPlannerRecoveryHelp error_code="{compute_path_error_code}"/>
+              <ClearEntireCostmap name="ClearGlobalCostmap-Context" service_name="global_costmap/clear_entirely_global_costmap"/>
+            </Sequence>
+          </RecoveryNode>
+        </RateController>
+        <RecoveryNode number_of_retries="1" name="FollowPath">
+          <FollowPath path="{path}" controller_id="{selected_controller}" error_code_id="{follow_path_error_code}"/>
+          <Sequence>
+            <WouldAControllerRecoveryHelp error_code="{follow_path_error_code}"/>
+            <ClearEntireCostmap name="ClearLocalCostmap-Context" service_name="local_costmap/clear_entirely_local_costmap"/>
+          </Sequence>
+        </RecoveryNode>
+      </PipelineSequence>
+      <Sequence>
+        <Fallback>
+          <WouldAControllerRecoveryHelp error_code="{follow_path_error_code}"/>
+          <WouldAPlannerRecoveryHelp error_code="{compute_path_error_code}"/>
+        </Fallback>
+        <ReactiveFallback name="RecoveryFallback">
+          <GoalUpdated/>
+          <RoundRobin name="RecoveryActions">
+            <Sequence name="ClearingActions">
+              <ClearEntireCostmap name="ClearLocalCostmap-Subtree" service_name="local_costmap/clear_entirely_local_costmap"/>
+              <ClearEntireCostmap name="ClearGlobalCostmap-Subtree" service_name="global_costmap/clear_entirely_global_costmap"/>
+            </Sequence>
+            <BackUp backup_dist="0.20" backup_speed="0.05" error_code_id="{backup_code_id}"/>
+            <Spin spin_dist="0.5" error_code_id="{spin_error_code}"/>
+            <Wait wait_duration="2.0"/>
+            
+          </RoundRobin>
+        </ReactiveFallback>
+      </Sequence>
+    </RecoveryNode>
+  </BehaviorTree>
+</root>

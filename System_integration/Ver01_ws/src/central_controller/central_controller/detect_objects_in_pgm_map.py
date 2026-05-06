@@ -9,10 +9,10 @@ PGM 地图封闭空间内物体点位识别样例程序（独立脚本，非 ROS
 
 两种模式：
   default     最外侧封闭轮廓内的「可通行房间」→ 房间内占据物（盒子/台子）中心。
-  enclosed-blobs  白色中间的灰/黑(205+占据)四连通区域；不按像素面积，按包围盒在地图坐标系下
-  x、y 方向跨度均不超过给定米数(默认 0.30m)；触边时仍要求边界邻接白色比例。
+  enclosed-blobs  白色中间的黑色占据块(=0)四连通区域；至少 5 像素才视为有效物体，
+  并按包围盒在地图坐标系下 x、y 方向跨度均不超过给定米数(默认 0.40m)；触边时仍要求边界邻接白色比例。
 
-像素约定（与 map_server 一致）：0=可通行(白)，254/255=占据，205=未知(深灰等)。
+像素约定（与 map_server 默认 negate:0 一致）：254/255=可通行(白)，0=占据/障碍/物体(黑)，205=未知(深灰)。
 """
 
 from __future__ import annotations
@@ -36,15 +36,19 @@ try:
 except ImportError:
     _HAS_YAML = False
 
-# 地图语义（与 map_server 一致）
-FREE = 0
-# 占据：部分地图保存为 254 或 255，均视为障碍/物体
-OCCUPIED_VALUES = (254, 255)
+# 地图语义（与 map_server 默认 negate:0 一致）
+# 白色 254/255 = 可通行；黑色 0 = 占据/障碍/物体；灰色 205 = 未知
+OCCUPIED = 0
+FREE_VALUES = (254, 255)
 UNKNOWN = 205
 
 
+def _is_free(pixel_val: int) -> bool:
+    return pixel_val in FREE_VALUES
+
+
 def _is_occupied(pixel_val: int) -> bool:
-    return pixel_val in OCCUPIED_VALUES
+    return pixel_val == OCCUPIED
 
 
 def connected_components_by_predicate(
@@ -129,6 +133,7 @@ DEFAULT_ORIGIN = (0.0, 0.0)
 # 物体占位过滤：像素块面积范围（像素数），过滤噪声与过大的墙
 MIN_OBJECT_PIXELS = 10
 MAX_OBJECT_PIXELS = 2500
+MIN_INTEREST_BLOB_PIXELS = 5
 
 
 def load_map_metadata_from_yaml(pgm_path: str) -> Optional[Tuple[float, Tuple[float, float]]]:
@@ -244,12 +249,12 @@ def connected_components(
 
 
 def connected_components_non_free(w: int, h: int, pixels: List[int]) -> List[List[int]]:
-    """对「非白色」(非 FREE) 像素做连通分量，用于识别被白色包裹的深色区域。"""
+    """对「非白色」(非可通行) 像素做连通分量，用于识别被白色包裹的深色区域。"""
     n = w * h
     visited = [False] * n
     components = []
     for start in range(n):
-        if visited[start] or pixels[start] == FREE:
+        if visited[start] or _is_free(pixels[start]):
             continue
         comp = []
         q = deque([start])
@@ -258,7 +263,7 @@ def connected_components_non_free(w: int, h: int, pixels: List[int]) -> List[Lis
             i = q.popleft()
             comp.append(i)
             for j in pixel_neighbors_4(w, h, i):
-                if not visited[j] and pixels[j] != FREE:
+                if not visited[j] and not _is_free(pixels[j]):
                     visited[j] = True
                     q.append(j)
         components.append(comp)
@@ -276,7 +281,7 @@ def touches_border(w: int, h: int, indices: List[int]) -> bool:
 
 def boundary_white_ratio(w: int, h: int, pixels: List[int], comp: List[int]) -> float:
     """
-    区块边界中邻接白色(FREE)的比例。1.0=完全被白色包围，0=完全不邻接白色。
+    区块边界中邻接白色(可通行)的比例。1.0=完全被白色包围，0=完全不邻接白色。
     用于判定「白色中间有明显区块」：比例越高越像物体。
     """
     comp_set = set(comp)
@@ -286,7 +291,7 @@ def boundary_white_ratio(w: int, h: int, pixels: List[int], comp: List[int]) -> 
         for j in pixel_neighbors_4(w, h, idx):
             if j not in comp_set:
                 edges_any += 1
-                if pixels[j] == FREE:
+                if _is_free(pixels[j]):
                     edges_white += 1
     if edges_any == 0:
         return 0.0
@@ -343,11 +348,11 @@ def free_space_map_centroid(
     origin_x: float,
     origin_y: float,
 ) -> Tuple[float, float]:
-    """全图 FREE(0) 像素在 map 坐标下的质心，用作无真车时导航预览的参考车位置。"""
+    """全图可通行(白色 254/255)像素在 map 坐标下的质心，用作无真车时导航预览的参考车位置。"""
     sx = sy = 0.0
     n = 0
     for idx, pv in enumerate(pixels):
-        if pv != FREE:
+        if not _is_free(pv):
             continue
         y, x = divmod(idx, w)
         mx, my = pixel_to_map(float(x), float(y), resolution, origin_x, origin_y, h)
@@ -365,19 +370,105 @@ def compute_nav_goal_map_xy(
     robot_mx: float,
     robot_my: float,
     standoff_m: float,
+    w: Optional[int] = None,
+    h: Optional[int] = None,
+    pixels: Optional[List[int]] = None,
+    resolution: Optional[float] = None,
+    origin: Optional[Tuple[float, float]] = None,
+    obstacle_check_radius_m: float = 1.0,
+    obstacle_check_start_cardinal_m: float = 0.28,
+    obstacle_check_start_diagonal_m: float = 0.20,
 ) -> Tuple[float, float]:
     """
     与 task_manager_utils.compute_pregrasp_pose 一致：沿车→兴趣点方向，
     在兴趣点一侧距兴趣点 standoff_m 的 map 坐标（无 ROS 依赖）。
+
+    若提供地图栅格信息，则以兴趣点为中心在 8 个方向上做 obstacle_check_radius_m
+    范围内障碍检查（上下左右+45 度对角）：
+      - 上下左右从 obstacle_check_start_cardinal_m 开始采样；
+      - 对角 45 度从 obstacle_check_start_diagonal_m 开始采样。
+    当任一方向存在障碍时，选择“障碍最远/无障碍”方向放置待机点；
+    若 8 方向都无障碍，则回退到原始“参考车→兴趣点”逻辑。
     """
-    dx = robot_mx - poi_mx
-    dy = robot_my - poi_my
-    dist = math.hypot(dx, dy)
+    dx_fallback = robot_mx - poi_mx
+    dy_fallback = robot_my - poi_my
+    dist = math.hypot(dx_fallback, dy_fallback)
     if dist > 1e-9:
-        dx /= dist
-        dy /= dist
+        dx_fallback /= dist
+        dy_fallback /= dist
     else:
-        dx, dy = 1.0, 0.0
+        dx_fallback, dy_fallback = 1.0, 0.0
+
+    dx, dy = dx_fallback, dy_fallback
+
+    def first_obstacle_distance_m(
+        dir_x: float, dir_y: float, start_distance_m: float
+    ) -> Optional[float]:
+        if (
+            w is None
+            or h is None
+            or pixels is None
+            or resolution is None
+            or origin is None
+            or obstacle_check_radius_m <= 0.0
+        ):
+            return None
+        step_m = max(float(resolution) * 0.5, 0.01)
+        d = max(step_m, start_distance_m)
+        if d > obstacle_check_radius_m + 1e-9:
+            return None
+        while d <= obstacle_check_radius_m + 1e-9:
+            sx = poi_mx + d * dir_x
+            sy = poi_my + d * dir_y
+            spx, spy = map_to_pixel(sx, sy, float(resolution), origin[0], origin[1], h)
+            ix, iy = int(round(spx)), int(round(spy))
+            if ix < 0 or ix >= w or iy < 0 or iy >= h:
+                return d
+            if not _is_free(pixels[iy * w + ix]):
+                return d
+            d += step_m
+        return None
+
+    if (
+        w is not None
+        and h is not None
+        and pixels is not None
+        and resolution is not None
+        and origin is not None
+        and obstacle_check_radius_m > 0.0
+    ):
+        raw_dirs = [
+            (1.0, 0.0),
+            (-1.0, 0.0),
+            (0.0, 1.0),
+            (0.0, -1.0),
+            (1.0, 1.0),
+            (-1.0, 1.0),
+            (-1.0, -1.0),
+            (1.0, -1.0),
+        ]
+        dir_scores = []
+        any_obstacle = False
+        for rx, ry in raw_dirs:
+            norm = math.hypot(rx, ry)
+            ux, uy = rx / norm, ry / norm
+            if abs(rx) + abs(ry) == 1:
+                start_m = obstacle_check_start_cardinal_m
+            else:
+                start_m = obstacle_check_start_diagonal_m
+            obs_d = first_obstacle_distance_m(ux, uy, start_m)
+            has_obstacle = obs_d is not None
+            if has_obstacle:
+                any_obstacle = True
+            clear_d = obs_d if obs_d is not None else obstacle_check_radius_m
+            can_place_standoff = clear_d >= standoff_m
+            align_fallback = ux * dx_fallback + uy * dy_fallback
+            dir_scores.append((can_place_standoff, clear_d, align_fallback, ux, uy))
+
+        if any_obstacle and dir_scores:
+            best = max(dir_scores, key=lambda s: (s[0], s[1], s[2]))
+            dx, dy = best[3], best[4]
+
     gx = poi_mx + standoff_m * dx
     gy = poi_my + standoff_m * dy
     return gx, gy
@@ -414,7 +505,19 @@ def draw_interest_points_with_nav_goals(
     print(f"导航预览参考车 (map): ({rx:.3f}, {ry:.3f}) m, standoff={standoff_m:.2f} m")
     for i, (cx_px, cy_px, area) in enumerate(blobs):
         poi_mx, poi_my = pixel_to_map(cx_px, cy_px, resolution, origin_x, origin_y, h)
-        gx, gy = compute_nav_goal_map_xy(poi_mx, poi_my, rx, ry, standoff_m)
+        gx, gy = compute_nav_goal_map_xy(
+            poi_mx,
+            poi_my,
+            rx,
+            ry,
+            standoff_m,
+            w=w,
+            h=h,
+            pixels=pixels,
+            resolution=resolution,
+            origin=origin,
+            obstacle_check_radius_m=1.0,
+        )
         npx, npy = map_to_pixel(gx, gy, resolution, origin_x, origin_y, h)
         ix_p, iy_p = int(round(cx_px)), int(round(cy_px))
         ix_n, iy_n = int(round(npx)), int(round(npy))
@@ -477,14 +580,13 @@ def find_enclosed_free_regions(
     include_unknown=True 时，将未知(205)也视为可通行，用于在未完全建图区域中检测物体。
     """
     if not include_unknown:
-        free_components = connected_components(w, h, pixels, FREE)
+        free_components = connected_components_by_predicate(w, h, pixels, _is_free)
     else:
-        # 可通行 = FREE 或 UNKNOWN
         n = w * h
         visited = [False] * n
         free_components = []
         for start in range(n):
-            if visited[start] or (pixels[start] != FREE and pixels[start] != UNKNOWN):
+            if visited[start] or not (_is_free(pixels[start]) or pixels[start] == UNKNOWN):
                 continue
             comp = []
             q = deque([start])
@@ -493,7 +595,7 @@ def find_enclosed_free_regions(
                 i = q.popleft()
                 comp.append(i)
                 for j in pixel_neighbors_4(w, h, i):
-                    if not visited[j] and (pixels[j] == FREE or pixels[j] == UNKNOWN):
+                    if not visited[j] and (_is_free(pixels[j]) or pixels[j] == UNKNOWN):
                         visited[j] = True
                         q.append(j)
             free_components.append(comp)
@@ -584,9 +686,10 @@ def _filter_interest_blob_by_bbox(
     返回 (cx_px, cy_px, n_pixels) 供标注与排序；不按面积阈值过滤。
     """
     span_x_px, span_y_px = bbox_inclusive_spans_px(comp, w)
-    if span_x_px * resolution > max_bbox_extent_m:
+    eps = resolution * 1e-6
+    if span_x_px * resolution > max_bbox_extent_m + eps:
         return None
-    if span_y_px * resolution > max_bbox_extent_m:
+    if span_y_px * resolution > max_bbox_extent_m + eps:
         return None
     cx, cy = centroid_pixel(comp, w)
     if not touches_border(w, h, comp):
@@ -601,28 +704,25 @@ def find_enclosed_blobs_in_map(
     h: int,
     pixels: List[int],
     resolution: float,
-    max_bbox_extent_m: float = 0.30,
+    max_bbox_extent_m: float = 0.40,
     white_ratio_min: float = 0.4,
-    occupied_only: bool = False,
+    min_blob_pixels: int = MIN_INTEREST_BLOB_PIXELS,
     dedupe_min_separation_px: float = 4.0,
 ) -> List[Tuple[float, float, int]]:
     """
-    识别「白色中间」的小块：灰(205)与黑(254/255)分别做四连通，再合并候选列表，
-    避免未知区与外墙在像素上连成一片时把整张图当成一块。
-    黑灰四邻接的同一物体常会在两侧各形成一个分量，由 dedupe 合并为一点。
-    仅按包围盒 x/y 跨度（米）过滤；整段贴外缘的条带由 component_lies_entirely_on_one_map_edge 剔除。
-    occupied_only=True 时只对占据像素做连通域（不含 205）。
+    识别「白色中间」的小块：仅对黑色占据(254/255)做四连通。
+    有效物体需满足：
+      1) 连通块像素数 >= min_blob_pixels（至少 5 像素）；
+      2) 包围盒 x/y 跨度（米）均 <= max_bbox_extent_m；
+      3) 不触边，或触边时 boundary_white_ratio >= white_ratio_min。
+    整段贴外缘的条带由 component_lies_entirely_on_one_map_edge 剔除。
     """
-    if occupied_only:
-        all_blocks = connected_components_by_predicate(
-            w, h, pixels, lambda v: _is_occupied(int(v))  # noqa: E731
-        )
-    else:
-        all_blocks = connected_components(w, h, pixels, UNKNOWN) + connected_components_occupied(
-            w, h, pixels
-        )
+    min_blob_pixels = max(MIN_INTEREST_BLOB_PIXELS, int(min_blob_pixels))
+    all_blocks = connected_components_occupied(w, h, pixels)
     result: List[Tuple[float, float, int]] = []
     for comp in all_blocks:
+        if len(comp) < min_blob_pixels:
+            continue
         if component_lies_entirely_on_one_map_edge(comp, w, h):
             continue
         one = _filter_interest_blob_by_bbox(
@@ -637,10 +737,10 @@ def get_interest_points_from_pgm(
     pgm_path: str,
     resolution: Optional[float] = None,
     origin: Optional[Tuple[float, float]] = None,
-    max_bbox_extent_m: float = 0.30,
+    max_bbox_extent_m: float = 0.40,
     white_ratio_min: float = 0.4,
     prefer_yaml: bool = True,
-    occupied_only: bool = False,
+    min_blob_pixels: int = MIN_INTEREST_BLOB_PIXELS,
     dedupe_min_separation_px: float = 4.0,
 ) -> List[Tuple[float, float]]:
     """
@@ -665,7 +765,7 @@ def get_interest_points_from_pgm(
         resolution,
         max_bbox_extent_m,
         white_ratio_min=white_ratio_min,
-        occupied_only=occupied_only,
+        min_blob_pixels=min_blob_pixels,
         dedupe_min_separation_px=dedupe_min_separation_px,
     )
     blobs.sort(key=lambda b: (-b[1], b[0]))
@@ -680,8 +780,8 @@ def run_detection_enclosed_blobs(
     pgm_path: str,
     resolution: float = DEFAULT_RESOLUTION,
     origin: Tuple[float, float] = DEFAULT_ORIGIN,
-    max_bbox_extent_m: float = 0.30,
-    occupied_only: bool = False,
+    max_bbox_extent_m: float = 0.40,
+    min_blob_pixels: int = MIN_INTEREST_BLOB_PIXELS,
     white_ratio_min: float = 0.4,
     dedupe_min_separation_px: float = 4.0,
     output_image: Optional[str] = None,
@@ -697,8 +797,9 @@ def run_detection_enclosed_blobs(
     w, h, pixels = load_pgm(pgm_path)
     print(f"地图尺寸: {w} x {h}, 分辨率: {resolution} m/px, 原点: {origin}")
     print(
-        f"识别目标: 白底上灰/黑四连通块，包围盒 x/y 跨度均 <= {max_bbox_extent_m} m；"
-        "触边时要求邻白比例阈值"
+        "识别目标: 白底上黑色占据(=0)四连通块，"
+        f"像素数 >= {max(MIN_INTEREST_BLOB_PIXELS, int(min_blob_pixels))}，"
+        f"包围盒 x/y 跨度均 <= {max_bbox_extent_m} m；触边时要求邻白比例阈值"
     )
     blobs = find_enclosed_blobs_in_map(
         w,
@@ -707,7 +808,7 @@ def run_detection_enclosed_blobs(
         resolution,
         max_bbox_extent_m,
         white_ratio_min=white_ratio_min,
-        occupied_only=occupied_only,
+        min_blob_pixels=min_blob_pixels,
         dedupe_min_separation_px=dedupe_min_separation_px,
     )
     # 按 y 降序、x 升序排列，便于与图中 3x3 从上到下、从左到右对应
@@ -761,7 +862,7 @@ def run_detection(
     w, h, pixels = load_pgm(pgm_path)
     print(f"地图尺寸: {w} x {h}, 分辨率: {resolution} m/px, 原点: {origin}")
     if include_unknown_as_free:
-        print("封闭空间定义: 可通行 = FREE(0) + UNKNOWN(205)")
+        print("封闭空间定义: 可通行 = 白色(254/255) + 未知(205)")
 
     enclosed_regions = find_enclosed_free_regions(w, h, pixels, include_unknown=include_unknown_as_free)
     print(f"封闭空间数量: {len(enclosed_regions)}")
@@ -826,9 +927,16 @@ def main():
     parser.add_argument(
         "--max-bbox-m",
         type=float,
-        default=0.30,
+        default=0.40,
         metavar="M",
-        help="[enclosed-blobs] 包围盒 x、y 跨度(米)均不超过 M (默认 0.30)",
+        help="[enclosed-blobs] 包围盒 x、y 跨度(米)均不超过 M (默认 0.40)",
+    )
+    parser.add_argument(
+        "--min-blob-pixels",
+        type=int,
+        default=MIN_INTEREST_BLOB_PIXELS,
+        metavar="N",
+        help="[enclosed-blobs] 黑色占据连通块最小像素数，最小强制为 5 (默认 5)",
     )
     parser.add_argument(
         "--dedupe-px",
@@ -838,11 +946,6 @@ def main():
         help="[enclosed-blobs] 质心距离小于 P 像素时只保留面积较大的一块 (默认 4)",
     )
     parser.add_argument("--include-unknown", action="store_true", help="[rooms 模式] 将未知(205)也视为可通行")
-    parser.add_argument(
-        "--occupied-only",
-        action="store_true",
-        help="[enclosed-blobs] 仅按占据(254/255)识别；默认灰+黑(205+占据)四连通",
-    )
     parser.add_argument(
         "--white-ratio",
         type=float,
@@ -887,7 +990,7 @@ def main():
             resolution=args.resolution,
             origin=tuple(args.origin),
             max_bbox_extent_m=args.max_bbox_m,
-            occupied_only=args.occupied_only,
+            min_blob_pixels=args.min_blob_pixels,
             white_ratio_min=args.white_ratio,
             dedupe_min_separation_px=args.dedupe_px,
             output_image=args.output,
