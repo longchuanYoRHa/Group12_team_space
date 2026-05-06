@@ -115,6 +115,8 @@ class TaskManagerAlignmentMixin:
         z_error = float(point.z) - target_z
 
         if is_place_align and abs(z_error) <= z_tol:
+            # For place: z trigger reached -> stop visual docking, then execute a short
+            # open-loop forward motion before publishing a fixed place target.
             self._stop_cmd_vel()
             self._visual_docking_active = False
             self._visual_docking_last_point = None

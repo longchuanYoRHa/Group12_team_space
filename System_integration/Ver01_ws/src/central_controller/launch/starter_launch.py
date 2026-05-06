@@ -1,16 +1,39 @@
+"""
+Starter launch for the integrated stack.
+
+This launch file intentionally sequences bring-up using small, polled readiness checks
+instead of fixed delays. The goal is to make startup robust across:
+- real robot (LiDAR present) vs simulation (LiDAR absent / use_sim_time=true)
+- variable Nav2 lifecycle activation timing
+"""
+
 import os
+
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, ExecuteProcess, RegisterEventHandler, LogInfo, SetEnvironmentVariable
+from launch.actions import (
+    DeclareLaunchArgument,
+    ExecuteProcess,
+    IncludeLaunchDescription,
+    LogInfo,
+    RegisterEventHandler,
+    SetEnvironmentVariable,
+)
 from launch.event_handlers import OnProcessExit
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, PythonExpression, TextSubstitution
+from launch.substitutions import (
+    LaunchConfiguration,
+    PathJoinSubstitution,
+    PythonExpression,
+    TextSubstitution,
+)
 from launch.conditions import IfCondition, UnlessCondition
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 
 
 def generate_launch_description():
-    # Check if lidar is connected
+    # Auto-detect LiDAR device.
+    # Note: this is a convenience default; users can override via launch arg `lidar_connected`.
     lidar_connected = False
     common_serial_ports = ['/dev/ttyUSB0', '/dev/ttyUSB1', '/dev/ttyACM0', '/dev/ttyACM1']
 
@@ -23,7 +46,9 @@ def generate_launch_description():
     if not lidar_connected:
         print("[WARN] No LiDAR detected, will skip LiDAR launch (simulation mode)")
 
-    # use_sim_time: true when no LiDAR (simulation), false when LiDAR present (real robot)
+    # use_sim_time:
+    # - true when no LiDAR (typically simulation)
+    # - false when LiDAR is present (real robot)
     use_sim_time_str = 'true' if not lidar_connected else 'false'
     use_sim_time_subst = TextSubstitution(text=use_sim_time_str)
 
@@ -35,6 +60,7 @@ def generate_launch_description():
         [FindPackageShare('custom_explore'), 'config', 'params.yaml']
     )
 
+    # Allow manual override while preserving the auto-detected default.
     lidar_connected_str = 'true' if lidar_connected else 'false'
     lidar_connected_config = LaunchConfiguration('lidar_connected', default=lidar_connected_str)
 
@@ -46,7 +72,8 @@ def generate_launch_description():
         condition=IfCondition(PythonExpression(["'", lidar_connected_config, "' == 'true'"]))
     )
 
-    # Wait for /scan (tight poll, no fixed delay after)
+    # Wait for /scan (tight poll, no fixed delay after).
+    # If your "simulation mode" does not publish /scan, this step will time out intentionally.
     wait_for_scan_cmd = ExecuteProcess(
         cmd=['bash', '-c',
              'timeout=120; elapsed=0; '
@@ -92,7 +119,8 @@ def generate_launch_description():
         output='screen',
     )
 
-    # Poll until lifecycle reports unconfigured, then configure + activate immediately (no extra waits)
+    # Configure+activate slam_toolbox lifecycle once it is discoverable as "unconfigured".
+    # We do this via CLI to avoid hard-coding a sleep and to keep the launch logic simple.
     slam_configure_activate_cmd = ExecuteProcess(
         cmd=['bash', '-c',
              'timeout=120; elapsed=0; '
@@ -243,6 +271,7 @@ def generate_launch_description():
     )
 
     if lidar_connected:
+        # Real robot: reset odometry once the service is available.
         reset_odometry_cmd = ExecuteProcess(
             cmd=[
                 'bash',
@@ -262,6 +291,7 @@ def generate_launch_description():
             output='screen',
         )
     else:
+        # Simulation convenience: keep the sequencing consistent but no-op the reset.
         reset_odometry_cmd = ExecuteProcess(
             cmd=['bash', '-c', 'echo "[INFO] Simulation (no LiDAR): skip /reset_odometry"; exit 0'],
             output='screen',

@@ -7,6 +7,8 @@ from central_controller.task_manager_v4_refactor.models import CargoState, TaskS
 
 
 class TaskManagerArmMixin:
+    """Arm/gripper command publication and result handling for V4."""
+
     def _copy_point(self, source: geometry_msgs.Point):
         target = geometry_msgs.Point()
         target.x = source.x
@@ -30,6 +32,8 @@ class TaskManagerArmMixin:
         if self.arm_status == "holding" and self.gripper_status == "object_held":
             self.get_logger().info("Grasp succeeded!")
             self.cargo_state = CargoState.HAS_OBJECT
+            # Persist the picked object's color so later bin detections can be filtered.
+            self._carried_object_color = self._grasp_command_color
             self.grasp_retry_count = 0
             self.adjust_nav2_for_carry_mode(True)
             self._arm_cmd_sent = False
@@ -42,6 +46,7 @@ class TaskManagerArmMixin:
         if self.arm_status == "error" or (self.arm_status == "idle" and self._arm_cmd_sent):
             self.grasp_retry_count += 1
             self._arm_cmd_sent = False
+            self._grasp_command_color = None
             if self.grasp_retry_count >= self.max_grasp_retries:
                 self.get_logger().warn("Grasp failed, max retries reached, abandoning object")
                 if self.object_pose:
@@ -50,6 +55,7 @@ class TaskManagerArmMixin:
                 self.state = TaskState.EXPLORE
                 self._publish_explore_resume_if_changed(True)
             else:
+                # Do not resend a pick target here; the next vision callback will re-drive the flow.
                 self.get_logger().info(
                     f"Grasp failed, retrying ({self.grasp_retry_count}/{self.max_grasp_retries})"
                 )
@@ -72,6 +78,8 @@ class TaskManagerArmMixin:
             self.place_retry_count = 0
             self.adjust_nav2_for_carry_mode(False)
             self._arm_cmd_sent = False
+            self._grasp_command_color = None
+            self._carried_object_color = None
             self._place_status_at_command = "unknown"
             self._place_status_changed_after_command = False
             if self.bin_pose is not None:
@@ -124,6 +132,7 @@ class TaskManagerArmMixin:
             f"in {self.get_parameter('camera_frame_id').value} frame."
         )
         self.arm_pick_pub.publish(target_pt)
+        self._grasp_command_color = color
         self._arm_cmd_sent = True
 
     def _execute_place_with_current_bin(self):

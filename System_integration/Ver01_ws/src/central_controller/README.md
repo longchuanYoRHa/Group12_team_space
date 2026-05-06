@@ -51,91 +51,125 @@ If any of these are missing, the chassis stack is probably not fully started or 
 
 ---
 
-`central_controller/task_manager_node_v2.py` is the main scheduling node. It runs a **topic-driven state machine** that ties together exploration, navigation, precision alignment, manipulation phases, and post-exploration map fallback.
+`central_controller/task_manager_node_v4.py` 是主调度节点（Task Manager V4）。它通过 **topic 驱动的状态机** 串联探索、视觉对准（纯视觉伺服）、机械臂抓取/放置，以及“探索结束后的地图兴趣点回退搜索”。
 
-The current implementation no longer uses the older intermediate states described in the previous README (`OBJECT_FOUND`, `BIN_FOUND`, `PAUSE_EXPLORE`). Transitions are driven in callbacks: pause exploration, send navigation goals, and advance the state machine directly.
+V4 的核心变化是：对准阶段不再依赖 docking action / costmap 参数切换，而是在 `PRECISION_ALIGN` 中使用 `/cmd_vel` 做 **纯视觉伺服**：
+
+- 对 **object**：camera frame 下用 \(x\) 偏移控制角速度，用 \(z\) 与抓取目标距离 `grasp_target_camera_z_m` 的误差控制线速度；误差进入容差后 **直接进入 `GRASP`**（v2-like：达标即抓取）。
+- 对 **bin**：视觉伺服到放置触发距离 `place_trigger_camera_z_m` 后，进入 `FORWARD_BEFORE_PLACE` **前进固定距离**，随后发布 **固定放置点**（`fixed_place_target_*`）并进入 `PLACE_IN_BIN`。
 
 ---
 
-## Architecture
+## 功能与逻辑（V4）
 
-### 1. Initialization and exploration start
+### 1. 初始化与探索启动
 
 - `INIT`
-  - Wait for the Nav2 action server.
-  - Call `/reset_odometry`.
-  - Read TF and store `home_pose`.
-- `PRE_EXPLORE_SPIN`
-  - If `pre_explore_spin_enable=true`, the robot first navigates in the `map` frame to a pose offset from the start.
-  - Default offset is `+0.3 m` along x, facing `-x` (`yaw = pi`).
-  - Frontier exploration starts only after this step completes.
+  - 等待 Nav2 action server 可用；
+  - 读取 TF（`map`<-`base_link`）并保存 `home_pose`。
+- `PRE_EXPLORE_SPIN`（可选）
+  - 若 `pre_explore_spin_enable=true`，先发送一个 Nav2 目标点：从 home pose 在 `map` 中偏移 \((dx, dy)\)，并将朝向设为 `yaw=pi`（面对 -x）。
+  - 在该阶段若检测到 bin，会把 bin 的 map 坐标 **缓存**（供之后“送货”使用）。
 - `EXPLORE`
-  - Publish `explore/resume=true` to start or resume `custom_explore_node`.
+  - 发布 `explore/resume=true` 启动/恢复 frontier exploration。
 
-### 2. Detections trigger navigation
+### 2. 视觉检测触发（object / bin）
 
-- The node counts consecutive detections; by default **5** frames are required before follow-up behavior runs.
-- When the threshold is met, the node:
-  - Pauses exploration;
-  - Cancels the active Nav2 goal if any;
-  - Computes pre-grasp / pre-place goals from the robot and target poses;
-  - Sends a Nav2 `NavigateToPose` goal.
+- V4 对 object/bin 都使用“连续检测帧计数”去抑制误检，默认需要 **5 帧**（`required_detection_frames=5`）。
+- **object 触发条件**
+  - 仅当 `cargo_state=empty` 且当前处于 `EXPLORE`（或从兴趣点接近阶段满足触发距离）才会进入后续流程。
+  - 达到阈值后：暂停探索、取消 Nav2（如有），进入 `PRECISION_ALIGN`（视觉伺服对准 object）。
+- **bin 触发条件**
+  - 在 `PRE_EXPLORE_SPIN/EXPLORE` 且 `cargo_state=empty` 时：只做 **缓存**（`cached_bin_poses[color]`），不进入放置流程。
+  - 在 `RESUME_EXPLORE_FOR_BIN` 且 `cargo_state=has_object` 时：达到阈值后暂停探索、取消 Nav2（如有），进入 `PRECISION_ALIGN`（视觉伺服对准 bin，准备放置）。
 
-### 3. Precision alignment
+### 3. 视觉对准（`PRECISION_ALIGN`）
 
-- After Nav2 reaches the pre-grasp pose, pre-place pose, or an interest point, the state becomes `PRECISION_ALIGN`.
-- In this phase the node:
-  - Waits for a new detection to trigger alignment;
-  - Temporarily disables local costmap inflation;
-  - Uses the `DockRobot` action for short-range docking-style alignment.
-- On success, the state advances to the next manipulation state.
+- `PRECISION_ALIGN` 不直接“自发”对准；它需要新的视觉点（`/target_pick/*` 或 `/target_place/*`）作为触发，随后开始发 `/cmd_vel` 做视觉伺服控制。
+- **对 object（抓取对准）**
+  - 误差进入容差（`visual_docking_x_tolerance_m` 与 `grasp_target_camera_z_tolerance_m`）后直接切换到 `GRASP` 并发布 `/arm/target_pick`。
+- **对 bin（放置对准）**
+  - 当 camera \(z\) 进入触发容差（`place_trigger_camera_z_m` 与 `place_trigger_camera_z_tolerance`）后，切换到 `FORWARD_BEFORE_PLACE`：
+    - 先停稳 `forward_before_place_stop_hold_sec`；
+    - 前进 `forward_before_place_distance_m`；
+    - 发布固定放置点 `/arm/target_place`（`fixed_place_target_*`）并进入 `PLACE_IN_BIN`。
+- **兴趣点回退路径中的超时**
+  - 若 `PRECISION_ALIGN` 的来源是 `INTEREST_POINT`，在 `wait_at_interest_point_sec` 内未等到视觉触发，则把该兴趣点加入 blacklist 并跳到下一个兴趣点。
 
-### 4. Post-manipulation behavior
+### 4. 抓取/放置结果与后撤（`BACKUP_AFTER_ACTION`）
 
-- After grasp or place, the node does not return to exploration immediately; it enters `BACKUP_AFTER_ACTION`:
-  - Drive backward for a fixed distance at the configured linear speed;
-  - Restore local costmap inflation;
-  - Then transition to the next state.
-- If full-map exploration is not finished yet, the flow eventually returns to `EXPLORE`.
+- `GRASP`/`PLACE_IN_BIN` 的结果由 `/arm/status` 与 `/arm/gripper_status` 判断：
+  - 抓取成功：`cargo_state=has_object`，进入 `BACKUP_AFTER_ACTION`，然后进入 `RESUME_EXPLORE_FOR_BIN`（恢复探索以找 bin）。
+  - 放置成功：`cargo_state=empty`，进入 `BACKUP_AFTER_ACTION`，然后进入 `POST_ACTION`（回到 `EXPLORE`）或在探索已结束时直接走兴趣点回退路径。
+- `BACKUP_AFTER_ACTION` 在 V4 中固定用 `/cmd_vel` 后退 `backup_distance_m`（速度使用 `docking_linear_speed_mps`），不再尝试 Nav2 备份目标。
 
-### 5. After exploration finishes
+### 5. 探索结束后的地图回退（兴趣点）
 
-- On `explore/finished=true`, the node:
-  - Stops exploration;
-  - Runs `map_saver_cli` to save the map;
-  - Extracts interest points from the generated `.pgm`;
-  - Filters blacklisted targets;
-  - Navigates through interest points to keep searching for targets.
-- Related states include:
-  - `RUN_MAP_DETECTION`
-  - `NAV_TO_INTEREST_POINT`
-  - `WAIT_AT_INTEREST_POINT`
-- In practice, after reaching an interest point the node often enters `PRECISION_ALIGN` and, on timeout, skips to the next interest point.
+- 当收到 `explore/finished=true`：
+  - 停止探索并调用 `map_saver_cli` 保存地图；
+  - 从 `.pgm` 中提取兴趣点并过滤 blacklist；
+  - 进入 `NAV_TO_INTEREST_POINT`，通过 Nav2 按顺序前往兴趣点附近的 standoff 位姿（支持基于 PGM 栅格的 8 方向近障检查选择 standoff 方向）。
+- 在 `NAV_TO_INTEREST_POINT` 接近目标时，如果 object 视觉再次出现且 Nav2 剩余距离小于 `interest_point_vision_trigger_distance_m`，会取消 Nav2 并切换到 `PRECISION_ALIGN` 做视觉伺服抓取。
 
 ---
 
-## State overview
+## 状态转换图（V4）
+
+下面的图覆盖主流程（探索→抓取→找箱→放置→继续探索）以及探索结束后的兴趣点回退分支。
+
+```mermaid
+stateDiagram-v2
+  [*] --> INIT
+  INIT --> PRE_EXPLORE_SPIN: pre_explore_spin_enable
+  INIT --> EXPLORE: pre_explore_spin_disable
+  PRE_EXPLORE_SPIN --> EXPLORE: Nav2 done/rejected
+
+  EXPLORE --> PRECISION_ALIGN: object detected (>=N) / pause explore
+  PRECISION_ALIGN --> GRASP: object aligned (x,z within tol)
+  GRASP --> BACKUP_AFTER_ACTION: grasp success
+  GRASP --> EXPLORE: grasp fail (max retries)
+
+  BACKUP_AFTER_ACTION --> RESUME_EXPLORE_FOR_BIN: after grasp backup
+  RESUME_EXPLORE_FOR_BIN --> PRECISION_ALIGN: bin detected (>=N) / pause explore
+  PRECISION_ALIGN --> FORWARD_BEFORE_PLACE: place z trigger reached
+  FORWARD_BEFORE_PLACE --> PLACE_IN_BIN: fixed place target published
+  PLACE_IN_BIN --> BACKUP_AFTER_ACTION: place success
+  PLACE_IN_BIN --> RESUME_EXPLORE_FOR_BIN: place fail (max retries)
+
+  BACKUP_AFTER_ACTION --> POST_ACTION: after place backup (explore not finished)
+  POST_ACTION --> EXPLORE: resume explore
+
+  EXPLORE --> NAV_TO_INTEREST_POINT: explore/finished
+  RESUME_EXPLORE_FOR_BIN --> NAV_TO_INTEREST_POINT: explore/finished & no cached bin
+  NAV_TO_INTEREST_POINT --> PRECISION_ALIGN: vision trigger near POI
+  PRECISION_ALIGN --> NAV_TO_INTEREST_POINT: POI align timeout / skip
+  NAV_TO_INTEREST_POINT --> [*]: all POIs visited (shutdown)
+```
+
+---
+
+## 状态概览（V4）
 
 | State | Description |
 |---|---|
-| `INIT` | Wait for Nav2 / TF, save home pose, run startup preparation. |
-| `PRE_EXPLORE_SPIN` | Pre-navigation before exploration: move to a fixed offset from home. |
-| `EXPLORE` | Frontier exploration is running. |
-| `PRECISION_ALIGN` | Fine alignment toward the object or bin (entered directly from explore / nav). |
-| `GRASP` | Grasp phase. |
-| `RESUME_EXPLORE_FOR_BIN` | Resume exploration to search for the next target (e.g. bin). |
-| `NAV_TO_BIN_PREPLACE` | Navigate to the pre-place pose in front of the bin. |
-| `PLACE_IN_BIN` | Place phase. |
-| `BACKUP_AFTER_ACTION` | Back up after manipulation, then restore navigation settings. |
-| `POST_ACTION` | In the current version, returns to `EXPLORE`. |
-| `EXPLORE_FINISHED_FALLBACK` | Entry to the post-exploration fallback path. |
-| `RUN_MAP_DETECTION` | Interest-point detection on the saved map. |
-| `NAV_TO_INTEREST_POINT` | Navigate to a candidate interest point. |
-| `WAIT_AT_INTEREST_POINT` | Wait at an interest point for a trigger; often superseded by `PRECISION_ALIGN` timeout logic. |
+| `INIT` | 等待 Nav2/TF，保存 home pose，并进入探索准备。 |
+| `PRE_EXPLORE_SPIN` | 探索前的预导航（可选）：去 home 的偏移点并缓存 bin 位姿。 |
+| `EXPLORE` | Frontier exploration 运行中（`explore/resume=true`）。 |
+| `PRECISION_ALIGN` | 纯视觉伺服对准（object 或 bin），用 `/cmd_vel` 控制。 |
+| `GRASP` | 发布 `/arm/target_pick` 并等待机械臂抓取结果。 |
+| `RESUME_EXPLORE_FOR_BIN` | 抓取后恢复探索以寻找 bin（或在探索已结束时转入回退/送货逻辑）。 |
+| `NAV_TO_BIN_PREPLACE` | 导航到 bin 的 standoff/preplace 位姿（当前 V4 主要走“视觉对准 bin”路径，保留该状态用于需要时的导航交接）。 |
+| `FORWARD_BEFORE_PLACE` | bin 放置触发后，前进固定距离以对齐投放。 |
+| `PLACE_IN_BIN` | 发布 `/arm/target_place`（固定放置点）并等待机械臂放置结果。 |
+| `BACKUP_AFTER_ACTION` | 抓取/放置后用 `/cmd_vel` 后退固定距离，然后进入下一状态。 |
+| `POST_ACTION` | 放置完成后的收尾状态：回到 `EXPLORE` 并恢复探索。 |
+| `EXPLORE_FINISHED_FALLBACK` | 探索结束后的回退流程入口（实现上多为内部阶段）。 |
+| `RUN_MAP_DETECTION` | 保存地图并提取 PGM 兴趣点（实现上多为内部阶段）。 |
+| `NAV_TO_INTEREST_POINT` | 依次导航到兴趣点 standoff，并在接近时尝试视觉触发抓取/放置流程。 |
 
 ---
 
-## External interfaces
+## 外部接口（V4）
 
 ### Topics
 
@@ -144,15 +178,21 @@ The current implementation no longer uses the older intermediate states describe
 - `explore/resume` (`std_msgs/Bool`)
 - `task_manager/state` (`std_msgs/String`)
 - `task_manager/cargo_state` (`std_msgs/String`)
+- `/arm/target_pick` (`geometry_msgs/Point`)
+- `/arm/target_place` (`geometry_msgs/Point`)
+- `/cmd_vel` (`geometry_msgs/Twist`)
 
 **Subscribed**
 
 - `explore/finished` (`std_msgs/Bool`)
+- `/arm/status` (`std_msgs/String`)
+- `/arm/gripper_status` (`std_msgs/String`)
+- `/target_pick/red|green|blue` (`geometry_msgs/Point`)
+- `/target_place/red|green|blue` (`geometry_msgs/Point`)
 
 ### Services
 
 - `task_manager/get_state` (`std_srvs/Trigger`) — returns current `state` and `cargo`.
-- `/reset_odometry` (`std_srvs/Trigger`) — called during initialization.
 
 ---
 

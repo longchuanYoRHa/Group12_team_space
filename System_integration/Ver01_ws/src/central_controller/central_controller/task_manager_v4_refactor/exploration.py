@@ -30,6 +30,8 @@ from central_controller.task_manager_v4_refactor.models import (
 
 
 class TaskManagerExplorationMixin:
+    """Exploration/vision-triggered transitions and map-fallback logic for V4."""
+
     def _handle_init_state(self):
         if not self.nav2_client.wait_for_server(timeout_sec=1.0):
             self.get_logger().warn("Waiting for Nav2 server...")
@@ -111,6 +113,8 @@ class TaskManagerExplorationMixin:
                 and distance_remaining_m is not None
                 and distance_remaining_m < trigger_distance_m
             ):
+                # When close enough to a POI, we prefer switching to visual docking
+                # rather than waiting for Nav2 to reach the exact standoff pose.
                 if self._map_coords_csv:
                     self._map_coords_csv.log_object_map_nav(
                         color,
@@ -182,6 +186,19 @@ class TaskManagerExplorationMixin:
         color = event.color
         self.detected_bin_colors.add(color)
 
+        expected_bin_color = self._carried_object_color
+        if (
+            self.cargo_state == CargoState.HAS_OBJECT
+            and expected_bin_color is not None
+            and color != expected_bin_color
+        ):
+            # Enforce color-matching: if we picked a red object, ignore green/blue bins.
+            self.bin_detection_count = 0
+            self.get_logger().debug(
+                f"Ignore bin color={color}, waiting for matched color={expected_bin_color}."
+            )
+            return
+
         try:
             pose_stamped = self._point_to_pose_stamped_in_map(msg)
         except Exception as exc:
@@ -202,6 +219,8 @@ class TaskManagerExplorationMixin:
             self.state in (TaskState.EXPLORE, TaskState.PRE_EXPLORE_SPIN)
             and self.cargo_state == CargoState.EMPTY
         ):
+            # Pre-cache bin poses while we're not carrying anything. This enables
+            # a "delivery even after explore finished" behavior.
             self.cached_bin_poses[color] = pose_stamped
             phase = (
                 "PRE_EXPLORE_SPIN"
@@ -352,6 +371,8 @@ class TaskManagerExplorationMixin:
     ) -> bool:
         self._start_explore_finished_fallback()
 
+        # Save the current map and extract interest points from the generated PGM.
+        # This is a pragmatic fallback when frontier exploration has completed.
         maps_dir = self._get_maps_directory()
         os.makedirs(maps_dir, exist_ok=True)
         basename = self.get_parameter("map_save_basename").value
@@ -409,7 +430,8 @@ class TaskManagerExplorationMixin:
         if self._map_coords_csv:
             self._map_coords_csv.log_pgm_points(raw_points, "pgm_raw", pgm_path=pgm_path)
 
-        # 缓存 PGM 栅格，用于兴趣点/箱子导航时做 8 方向近障检查并选 standoff 方向。
+        # Cache the PGM raster so we can choose an obstacle-aware standoff direction
+        # (8-direction probing) when navigating to POIs / cached bins.
         self._interest_nav_map_context = None
         try:
             meta = load_map_metadata_from_yaml(pgm_path)
@@ -500,11 +522,14 @@ class TaskManagerExplorationMixin:
         if not self.cached_bin_poses:
             return False
 
+        expected_bin_color = self._carried_object_color
         robot_x, robot_y = self._get_robot_xy_in_map()
         best_choice = None
         best_dist_sq = None
 
         for color, pose_stamped in self.cached_bin_poses.items():
+            if expected_bin_color is not None and color != expected_bin_color:
+                continue
             position = pose_stamped.pose.position
             if check_pose_in_blacklist(
                 position, self.bin_blacklist, self.blacklist_radius

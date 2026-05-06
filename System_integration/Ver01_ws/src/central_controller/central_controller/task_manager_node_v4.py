@@ -57,6 +57,14 @@ class TaskManagerNodeV4(
     TaskManagerNavigationMixin,
     Node,
 ):
+    """Central task scheduler node (V4).
+
+    Notes:
+    - The node runs a simple event-dispatch loop driven by a periodic timer (TickEvent)
+      plus async callbacks (Nav2 futures, vision topics, explore finished).
+    - Most state-specific logic lives in the refactor mixins under `task_manager_v4_refactor/`.
+    """
+
     def __init__(self):
         super().__init__("task_manager_v4")
         self._init_runtime_state()
@@ -100,8 +108,6 @@ class TaskManagerNodeV4(
 
         self.detected_object_colors = set()
         self.detected_bin_colors = set()
-        self._map_fallback_round_count = 0
-        self._map_fallback_max_rounds = 15
         self.interest_points = []
         self.interest_point_index = 0
         self.current_interest_point = None
@@ -111,6 +117,8 @@ class TaskManagerNodeV4(
         self.arm_status = "idle"
         self.gripper_status = "unknown"
         self._arm_cmd_sent = False
+        self._grasp_command_color = None
+        self._carried_object_color = None
         self._place_status_at_command = "unknown"
         self._place_status_changed_after_command = False
 
@@ -263,6 +271,8 @@ class TaskManagerNodeV4(
         return response
 
     def dispatch(self, event: TaskEvent) -> None:
+        # Single entry point for all events. This keeps state transitions centralized
+        # and makes it easier to reason about "who can change state".
         if isinstance(event, Nav2GoalResponseEvent):
             self._apply_nav2_goal_response(event.future)
             return
@@ -293,6 +303,8 @@ class TaskManagerNodeV4(
         self.cargo_state_pub.publish(cargo_msg)
 
     def _handle_tick_by_state(self) -> None:
+        # Keep tick lightweight: only do periodic control steps / result polling for
+        # states that require it.
         if self.state == TaskState.INIT:
             self._handle_init_state()
         elif self.state == TaskState.GRASP and self._arm_cmd_sent:
@@ -314,7 +326,7 @@ class TaskManagerNodeV4(
 def main(args=None):
     rclpy.init(args=args)
     startup_logger = rclpy.logging.get_logger("task_manager_v4")
-    startup_logger.info("Startup delay enabled: countdown 30s before node starts.")
+    startup_logger.info("Startup delay enabled: countdown 10s before node starts.")
     for remaining in range(10, 0, -1):
         startup_logger.info(f"Node starts in {remaining:02d}s...")
         time.sleep(1.0)

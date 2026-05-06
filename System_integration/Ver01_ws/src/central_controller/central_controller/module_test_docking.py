@@ -66,6 +66,8 @@ class ModuleTestDockingNode(Node):
         self._arm_cmd_sent = False
         self._grasp_target_point: Optional[geometry_msgs.Point] = None
         self._place_target_point: Optional[geometry_msgs.Point] = None
+        self._visual_pick_last_color: Optional[str] = None
+        self._locked_pick_color: Optional[str] = None
 
         self.declare_parameter("camera_frame_id", "camera_link")
         self.declare_parameter("visual_align_timeout_sec", 120.0)
@@ -171,7 +173,9 @@ class ModuleTestDockingNode(Node):
     def _enter_visual_align_pick_phase(self):
         self._stop_cmd_vel()
         self._visual_pick_last_point = None
+        self._visual_pick_last_color = None
         self._grasp_target_point = None
+        self._locked_pick_color = None
         now = time.monotonic()
         timeout = float(self.get_parameter("visual_align_timeout_sec").value)
         self._visual_align_deadline = now + max(5.0, timeout)
@@ -187,6 +191,7 @@ class ModuleTestDockingNode(Node):
             return
 
         self._visual_pick_last_point = msg
+        self._visual_pick_last_color = color
         self.get_logger().debug(f"Vision pick {color} from {topic}: x={msg.x:.3f} z={msg.z:.3f}")
 
     def _enter_visual_align_place_phase(self):
@@ -263,6 +268,11 @@ class ModuleTestDockingNode(Node):
     def _place_point_callback(self, msg: geometry_msgs.Point, color: str, topic: str):
         self._last_vision_msg_time = self.get_clock().now()
         if self.current_state != TestState.PRECISION_ALIGN_PLACE:
+            return
+        if self._locked_pick_color is not None and color != self._locked_pick_color:
+            self.get_logger().debug(
+                f"Vision place {color} from {topic} ignored, locked color={self._locked_pick_color}."
+            )
             return
 
         self._visual_place_last_point = msg
@@ -436,9 +446,11 @@ class ModuleTestDockingNode(Node):
             self._grasp_target_point = geometry_msgs.Point(
                 x=point.x, y=point.y, z=point.z
             )
+            self._locked_pick_color = self._visual_pick_last_color
             self.get_logger().info(
                 "PRECISION_ALIGN_PICK: aligned within tolerance -> GRASP "
-                f"(|x_err|={abs(x_error):.4f}, |z_err|={abs(z_error):.4f})."
+                f"(|x_err|={abs(x_error):.4f}, |z_err|={abs(z_error):.4f}, "
+                f"pick_color={self._locked_pick_color})."
             )
             self._enter_grasp_state()
             return
