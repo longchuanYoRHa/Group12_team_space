@@ -20,10 +20,23 @@ sshpass -p 'team12' ssh -t leo-rover-12@10.42.0.227 "sshpass -p 'trunk' ssh -o S
 
 ---
 
-## 🧠 3. Central Controller
-Launches the main integration logic from the Group 12 workspace on the NUC.
+## 🧠 3. Central Controller (Integration Tests)
+Launch the specific logic module required for your current test. 
+*Path: `~/Group12_team_space/System_integration/Ver01_ws`*
+
+### A. Pick and Place Test
 ```bash
-sshpass -p 'team12' ssh -t leo-rover-12@10.42.0.227 "export ROS_DOMAIN_ID=12; source /opt/ros/jazzy/setup.bash; cd ~/Group12_team_space/System_integration/Ver01_ws && source install/setup.bash; ros2 launch central_controller starter_launch"
+sshpass -p 'team12' ssh -t leo-rover-12@10.42.0.227 "export ROS_DOMAIN_ID=12; source /opt/ros/jazzy/setup.bash; cd ~/Group12_team_space/System_integration/Ver01_ws && source install/setup.bash; ros2 launch central_controller module_launch.py"
+```
+
+### B. Explore Test
+```bash
+sshpass -p 'team12' ssh -t leo-rover-12@10.42.0.227 "export ROS_DOMAIN_ID=12; source /opt/ros/jazzy/setup.bash; cd ~/Group12_team_space/System_integration/Ver01_ws && source install/setup.bash; ros2 launch central_controller module02_launch.py"
+```
+
+### C. Full Control (Starter)
+```bash
+sshpass -p 'team12' ssh -t leo-rover-12@10.42.0.227 "export ROS_DOMAIN_ID=12; source /opt/ros/jazzy/setup.bash; cd ~/Group12_team_space/System_integration/Ver01_ws && source install/setup.bash; ros2 launch central_controller starter_launch.py"
 ```
 
 ---

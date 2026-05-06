@@ -4,40 +4,52 @@ This folder contains the automation and documentation required to launch the dis
 
 ---
 
-## 🚀 Quick Start (Automated)
+## 🚀 Quick Start (Automated Launchers)
 
-To launch all four system components (**Vision, Arm, Controller, and RViz**) simultaneously in a grouped Terminator environment, run:
+Choose the script that matches your current testing phase. These scripts will spawn 4 separate **Terminator** windows for Vision, the Arm, the Central Controller, and RViz.
 
+### 1. Pick and Place Test
 ```bash
-chmod +x start.sh
-./start.sh
+chmod +x start_pick_place.sh
+./start_pick_place.sh
 ```
-*Note: This script will spawn 4 separate windows/tabs labeled with "Rover 12". Logs will remain visible even if a node crashes.*
+
+### 2. Autonomous Explore Test
+```bash
+chmod +x start_explore.sh
+./start_explore.sh
+```
+
+### 3. Full System Control (Starter)
+```bash
+chmod +x start_full_control.sh
+./start_full_control.sh
+```
+*Note: Terminal windows will stay open even if a node crashes, allowing you to debug the logs.*
 
 ---
 
 ## 🛠️ Folder Contents
 
-### 1. `start.sh` (Main Launcher)
-The primary automation script. It handles:
-*   Secure NUC login via `sshpass`.
-*   X11 Forwarding for Vision and RViz GUIs.
-*   Double-hop SSH for the Manipulator Arm.
-*   Persistent terminal windows for real-time log monitoring.
+### 1. Automation Scripts (`.sh`)
+The primary launchers for the system. They handle:
+*   **Secure Logins**: Automated authentication via `sshpass`.
+*   **X11 Forwarding**: Tunnels Vision and RViz GUIs directly to your laptop.
+*   **Double-Hop SSH**: Reaches the Manipulator Pi through the NUC.
+*   **Environment Sourcing**: Automatically sources ROS 2 Jazzy and your local workspaces.
 
-### 2. `component_start.md` (Manual Commands)
+### 2. `component_start.md` (Manual & Individual Commands)
 Refer to this document if you need to:
-*   Launch only a **single component** (e.g., just the Vision node).
-*   Debug specific network or sourcing issues.
-*   Copy-paste individual "One-Command" strings for terminal testing.
+*   Launch only a **single component** (e.g., just the Arm).
+*   Use individual "One-Command" strings for debugging in a single terminal.
 
 ---
 
 ## 💡 System Requirements
 
-*   **Subnet**: Your laptop must be on the `10.42.0.x` network.
-*   **Terminator**: Ensure Terminator is installed (`sudo apt install terminator`).
-*   **X-Server**: A running X-Server is required to display the Vision and RViz GUIs on your laptop screen.
+*   **Network**: Laptop must be on the **10.42.0.x** subnet.
+*   **Terminator**: Required for multi-window spawning (`sudo apt install terminator`).
+*   **X-Server**: Must be active for GUIs to appear. (Linux: `xhost +` | Windows: Xming/VcXsrv).
 *   **Credentials**:
     *   **NUC**: `leo-rover-12` | `team12`
     *   **Arm**: `elephant` | `trunk`
@@ -47,9 +59,9 @@ Refer to this document if you need to:
 
 ## ⚠️ Troubleshooting
 
-1.  **"Connection Refused"**: Ensure the NUC is powered on and reachable at `10.42.0.227`.
-2.  **Empty GUI Windows**: Check if you have an active X-Server. On Linux, run `xhost +` to allow connections.
-3.  **Missing Topics**: Ensure the Sanity Checker was run recently to synchronize system clocks across all nodes.
+1.  **Node Crashes on Startup**: Ensure you have run the **Sanity Checker** first to sync all system clocks.
+2.  **"sshpass: command not found"**: Install it on your laptop using `sudo apt install sshpass`.
+3.  **Controller Fails to Source**: Ensure the workspace path `~/Group12_team_space/System_integration/Ver01_ws` exists on the NUC.
 
 ---
 **Rover 12 | Group 12 Integration**
