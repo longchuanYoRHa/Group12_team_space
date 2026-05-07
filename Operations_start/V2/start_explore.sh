@@ -11,26 +11,26 @@ LOCAL_RVIZ_PATH="/home/student04/Design_Project_Git_Repository/Group12_team_spac
 
 echo "🚀 Launching Rover 12: EXPLORE TEST..."
 
-# 1. Cleanup local ROS 2 state to prevent discovery glitches
-echo "Cleaning up local ROS 2 daemon..."
+# --- LOCAL NETWORK PREP ---
+# Force laptop to reset its discovery cache to see the NUC
 export ROS_DOMAIN_ID=$DOMAIN
 ros2 daemon stop
 ros2 daemon start
 
 sleep 1
 
-# 2. CONTROLLER (Explore) - Running on NUC
-# We keep this as is since you don't want to alter the NUC side.
+# 1. CONTROLLER (Explore) - Running on NUC
+# Using -t to ensure the shell stays open and responsive
 terminator -T "Rover 12: CONTROLLER" -e "sshpass -p '$NUC_PASS' ssh -t $NUC_USER@$NUC_IP \"export ROS_DOMAIN_ID=$DOMAIN; source /opt/ros/jazzy/setup.bash; cd ~/Group12_team_space/System_integration/Ver01_ws && source install/setup.bash; ros2 launch central_controller module02_launch.py; bash\"" &
 
 sleep 2
 
-# 3. RVIZ - Running LOCALLY on your laptop
-# Added ROS_LOCALHOST_ONLY=0 to ensure it looks for the NUC
-# Added a small delay to let the NUC nodes initialize first
+# 2. RVIZ - Running LOCALLY on your laptop
+# Added DISCOVERY_RANGE=SUBNET to ensure the map/lidar data is found over Wi-Fi
 terminator -T "Rover 12: LOCAL RVIZ" -e "bash -c \"
     export ROS_DOMAIN_ID=$DOMAIN;
     export ROS_LOCALHOST_ONLY=0;
+    export ROS_AUTOMATIC_DISCOVERY_RANGE=SUBNET;
     source /opt/ros/jazzy/setup.bash;
     echo 'Waiting for NUC nodes to appear...';
     sleep 2;

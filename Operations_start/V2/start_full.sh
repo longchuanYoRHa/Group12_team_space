@@ -18,12 +18,14 @@ ros2 daemon stop
 ros2 daemon start
 
 # 1. VISION (On NUC)
-terminator -T "Rover 12: VISION" -e "sshpass -p '$NUC_PASS' ssh -YC $NUC_USER@$NUC_IP \"export ROS_DOMAIN_ID=$DOMAIN; export ROS_AUTOMATIC_DISCOVERY_RANGE=SUBNET; source ~/robots/bin/activate && cd ~/vision_pkg && source install/setup.bash; ros2 run vision_pkg rover_vision; bash\"" &
+# Added -t here to ensure an interactive shell for the final bash
+terminator -T "Rover 12: VISION" -e "sshpass -p '$NUC_PASS' ssh -tYC $NUC_USER@$NUC_IP \"export ROS_DOMAIN_ID=$DOMAIN; export ROS_AUTOMATIC_DISCOVERY_RANGE=SUBNET; source ~/robots/bin/activate && cd ~/vision_pkg && source install/setup.bash; ros2 run vision_pkg rover_vision; bash\"" &
 
 sleep 1 
 
-# 2. ARM (On NUC -> Elephant SSH)
-terminator -T "Rover 12: ARM" -e "sshpass -p '$NUC_PASS' ssh -t $NUC_USER@$NUC_IP \"sshpass -p 'trunk' ssh -o StrictHostKeyChecking=no elephant@10.0.1.3 'export ROS_DOMAIN_ID=$DOMAIN; source /opt/ros/jazzy/setup.bash; cd ~/ros2_ws && source install/setup.bash; ros2 launch my_cobot_control mycobot_with_tf2.launch.py; bash'\"" &
+# 2. ARM (On NUC -> Elephant SSH - DOUBLE-T FIX)
+# Fixed: Added -t to the nested SSH command to Elephant robot
+terminator -T "Rover 12: ARM" -e "sshpass -p '$NUC_PASS' ssh -t $NUC_USER@$NUC_IP \"sshpass -p 'trunk' ssh -t -o StrictHostKeyChecking=no elephant@10.0.1.3 'export ROS_DOMAIN_ID=$DOMAIN; source /opt/ros/jazzy/setup.bash; cd ~/ros2_ws && source install/setup.bash; ros2 launch my_cobot_control mycobot_with_tf2.launch.py; bash'\"" &
 
 sleep 1
 
@@ -33,7 +35,6 @@ terminator -T "Rover 12: CONTROLLER" -e "sshpass -p '$NUC_PASS' ssh -t $NUC_USER
 sleep 2
 
 # 4. RVIZ (Running LOCALLY on Laptop)
-# We add discovery variables here ONLY for your laptop environment.
 echo "🖥️ Starting RViz on Native Laptop Hardware..."
 terminator -T "Rover 12: LOCAL RVIZ" -e "bash -c \"
     export ROS_DOMAIN_ID=$DOMAIN; 

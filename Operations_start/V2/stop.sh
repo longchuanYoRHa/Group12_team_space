@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Configuration (Matching your launch scripts)
+# Configuration
 NUC_IP="10.42.0.227"
 NUC_USER="leo-rover-12"
 NUC_PASS="team12"
@@ -9,25 +9,37 @@ ELEPHANT_PASS="trunk"
 
 echo "🛑 SHUTDOWN SEQUENCE INITIATED..."
 
-# 1. KILL LOCAL RVIZ AND TERMINATOR PROCESSES
-echo "Closing local ROS 2 processes..."
-pkill -INT -f "rviz2"
+# 1. SEND SIGINT (Ctrl+C) TO ALL NODES
+# We target the NUC and Elephant Board simultaneously
+echo "📡 Sending SIGINT to NUC and Elephant Board..."
+sshpass -p "$NUC_PASS" ssh -o ConnectTimeout=2 $NUC_USER@$NUC_IP "
+    pkill -INT -u $NUC_USER ros2; 
+    sshpass -p '$ELEPHANT_PASS' ssh -o StrictHostKeyChecking=no elephant@$ELEPHANT_IP 'pkill -INT ros2'
+" 2>/dev/null &
 
-# 2. REMOTE KILL ON NUC (Vision and Controller)
-echo "Sending Remote SIGINT to NUC (@$NUC_IP)..."
-sshpass -p "$NUC_PASS" ssh -o ConnectTimeout=2 $NUC_USER@$NUC_IP "pkill -INT -u $NUC_USER ros2; pkill -INT -u $NUC_USER python3" 2>/dev/null &
+# 2. LOCAL CLEANUP
+pkill -INT rviz2
 
-# 3. REMOTE KILL ON ELEPHANT BOARD (The nested SSH hop)
-# We log into the NUC to tell it to tell the Elephant board to stop.
-echo "Sending Remote SIGINT to Elephant Board (@$ELEPHANT_IP)..."
-sshpass -p "$NUC_PASS" ssh -o ConnectTimeout=2 $NUC_USER@$NUC_IP "sshpass -p '$ELEPHANT_PASS' ssh -o StrictHostKeyChecking=no $ELEPHANT_IP 'pkill -INT ros2'" 2>/dev/null &
-
-# 4. GRACE PERIOD
-echo "⏳ Waiting 10 seconds for all nodes to release DDS participants..."
+# 3. THE 10-SECOND GRACE PERIOD
+# Essential for large Vision and Nav nodes to clear their queues
+echo "⏳ Waiting 10 seconds for graceful node destruction..."
 sleep 10
 
-# 5. FINAL CLEANUP: CLOSE TERMINALS
-echo "🧹 Closing all Rover 12 Terminator windows..."
+# 4. FINAL HARD CLEANUP & DAEMON RESET
+# If anything is still hanging, this forces it closed and clears the discovery cache
+echo "🧹 Performing final cleanup and flushing DDS cache..."
+sshpass -p "$NUC_PASS" ssh -o ConnectTimeout=2 $NUC_USER@$NUC_IP "
+    pkill -9 -u $NUC_USER ros2; 
+    pkill -9 -u $NUC_USER python3;
+    ros2 daemon stop;
+    sshpass -p '$ELEPHANT_PASS' ssh -o StrictHostKeyChecking=no elephant@$ELEPHANT_IP 'pkill -9 ros2'
+" 2>/dev/null
+
+# Reset local daemon too
+ros2 daemon stop && ros2 daemon start
+
+# 5. CLOSE TERMINALS
+echo "🪟 Closing Terminator windows..."
 pkill -f "terminator -T Rover 12"
 
-echo "✅ System clean. Ready for next run."
+echo "✅ System clean. Ready for the next run."
